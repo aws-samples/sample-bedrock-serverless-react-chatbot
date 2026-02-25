@@ -1,0 +1,381 @@
+/* Chat Container styles  !! This needs to be cleaned up */
+/* Chat Container styles */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  /* padding: 0.5rem; */
+  position: relative;
+  flex: 1;
+  /* overflow-y: visible; */
+  /* height: 100%; */
+}
+
+.chat-ui-scroll-container {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  /* height: calc(100vh - 250px); */
+  max-height: calc(100vh - 295px);
+}
+
+/* Mobile responsive styles for chat container */
+@media (max-width: 768px) {
+  .chat-ui-scroll-container {
+    max-height: calc(100vh - 250px);
+  }
+}
+
+.chat-messages-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  /* padding-bottom: 80px; */
+}
+
+.prompt-container {
+  position: fixed;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40%;
+  max-width: 800px;
+  /* z-index: 100; */
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--color-background-layout-main);
+}
+
+/* Mobile responsive styles */
+@media (max-width: 768px) {
+  .prompt-container {
+    width: 90%;
+    bottom: 5px;
+    padding: 8px;
+  }
+}
+
+
+
+.prompt-wrapper {
+  position: relative;
+}
+
+.file-upload-container {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 10px;
+  background-color: var(--color-background-container-content);
+  border-radius: 4px;
+  padding: 5px;
+  z-index: 200;
+}
+
+/* Container wrapper styles */
+.chat-ui-content-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  position: relative; /* Add position relative */
+}
+
+/* Message Bubbles - Add this new section */
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  position: relative;  /* Add this */
+  width: 100%;        /* Add this */
+}
+
+/* Message Bubbles - Update these selectors */
+.awsui-chat-bubble {
+  max-width: 85%;
+  margin: 8px 0;
+  position: relative;  /* Add this */
+}
+
+/* Mobile responsive styles for chat bubbles */
+@media (max-width: 768px) {
+  .awsui-chat-bubble {
+    max-width: 95%;
+  }
+}
+
+/* Ensure proper ordering */
+.chat-container > * {
+  order: unset !important;  /* Add this to prevent any automatic reordering */
+}
+
+/* Rest of your existing CSS remains the same */
+
+
+
+/* Message Bubbles */
+[data-messaging-type="outgoing"],
+[data-messaging-type="incoming"] {
+  max-width: 85%;
+  margin: 8px 0;
+}
+
+[data-messaging-type="outgoing"] {
+  align-self: flex-end;
+}
+
+[data-messaging-type="incoming"] {
+  align-self: flex-start;
+}
+
+/* Message Content Styling */
+[data-messaging-type="outgoing"] .awsui-chat-bubble-content {
+  background-color: #0972d3;
+  color: white;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+[data-messaging-type="incoming"] .awsui-chat-bubble-content {
+  background-color: #f2f3f3;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+/* Code Blocks */
+.code-block-wrapper {
+  position: relative;
+  margin: 1em 0;
+  background-color: #1e1e1e;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.code-block-language {
+  display: inline-block;
+  color: #fff;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: 'Fira Code', 'Courier New', monospace;
+  margin-right: auto;
+  background-color: #444;
+  border-radius: 4px;
+  border: 1px solid #555;
+}
+
+.code-block-wrapper pre {
+  margin: 0;
+  padding: 1em;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+.code-block-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 4px 8px;
+  background-color: #2d2d2d;
+}
+
+/* Inline Code */
+.inline-code {
+  font-family: 'Fira Code', 'Courier New', monospace;
+  background-color: #2d2d2d;
+  color: #fff;
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  font-size: 90%;
+  margin: 0 0.2em;
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+/* Markdown Content */
+.awsui-chat-bubble-content p:not(:last-child) {
+  margin-bottom: 1em;
+}
+
+.awsui-chat-bubble-content ul,
+.awsui-chat-bubble-content ol {
+  margin: 1em 0;
+  padding-left: 2em;
+}
+
+/* Button Interactions */
+.code-block-footer button {
+  transition: all 0.2s ease;
+}
+
+.code-block-footer button:hover {
+  background-color: #444;
+}
+
+/* Cursor blink animation */
+.cursor-blink {
+  display: inline-block;
+  width: 0.6em;
+  height: 1.2em;
+  background-color: #333;
+  animation: blink 1s step-end infinite;
+  margin-left: 2px;
+  vertical-align: middle;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+/* Persona Selector Styles */
+.persona-selector-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background-color: var(--color-background-container-content);
+  border-radius: 6px;
+  border: 1px solid var(--color-border-divider-default);
+}
+
+.persona-active-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--color-text-status-success);
+}
+
+.persona-info-icon {
+  cursor: pointer;
+  color: var(--color-text-interactive-default);
+}
+
+.persona-info-icon:hover {
+  color: var(--color-text-interactive-hover);
+}
+
+/* Mobile responsive styles for persona selector */
+@media (max-width: 768px) {
+  .persona-selector-container {
+    padding: 2px 4px;
+    gap: 4px;
+  }
+  
+  .persona-active-indicator {
+    font-size: 0.7rem;
+  }
+}
+
+/* Citation Bar */
+.citation-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0 0;
+  margin-top: 10px;
+  border-top: 1px solid var(--color-border-divider-default, #e9ebed);
+}
+
+.citation-bar-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-body-secondary, #5f6b7a);
+}
+
+.citation-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.citation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--color-background-button-normal-default, #fff);
+  border: 1px solid var(--color-border-button-normal-default, #7d8998);
+  border-radius: 16px;
+  font-size: 12px;
+  color: var(--color-text-body-default, #000716);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  max-width: 200px;
+}
+
+.citation-chip-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #0972d3;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.awsui-dark-mode .citation-chip-number,
+.awsui .awsui-dark-mode .citation-chip-number {
+  background: #539fe5;
+  color: #0d1b2a;
+}
+
+.citation-chip:hover {
+  background: var(--color-background-button-normal-hover, #e9ebed);
+  border-color: var(--color-border-button-normal-hover, #414d5c);
+}
+
+.citation-chip-flash {
+  animation: chipFlash 1.5s ease;
+}
+
+@keyframes chipFlash {
+  0%, 100% { box-shadow: none; }
+  20%, 60% { box-shadow: 0 0 0 3px var(--color-border-status-info, rgba(9, 114, 211, 0.4)); background: var(--color-background-status-info, #e8f0fe); }
+}
+
+/* Inline citation links in response text */
+.inline-citation-link {
+  display: inline;
+  background: none;
+  color: var(--color-text-link-default, #0972d3);
+  border: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0;
+  margin: 0 1px;
+  cursor: pointer;
+  vertical-align: super;
+  line-height: 1.4;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.inline-citation-link:hover {
+  color: var(--color-text-link-hover, #033160);
+  background: none;
+}
+
+
+.citation-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .citation-bar {
+    max-width: 95%;
+  }
+  .citation-chip {
+    max-width: 150px;
+  }
+}

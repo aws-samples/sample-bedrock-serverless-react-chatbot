@@ -1,0 +1,788 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Foundation Stack - Shared Infrastructure for Bedrock Agent Chatbot (KMS keys, logging buckets, DLQ)'
+
+# This stack provides shared infrastructure resources used by all other stacks:
+# - KMS keys for DynamoDB and S3 encryption with automatic key rotation
+# - S3 buckets for access logs (S3 and CloudFront)
+# - SQS dead letter queue for Lambda functions
+# All resources are configured with comprehensive security controls
+
+Parameters:
+  UniqueSuffix:
+    Type: String
+    Description: 'Deterministic hash suffix for S3 bucket names (avoids exposing AWS account ID)'
+    AllowedPattern: '[a-f0-9]{8}'
+    ConstraintDescription: 'Must be an 8-character lowercase hex string'
+
+Resources:
+  # ============================================================================
+  # KMS Keys for Encryption at Rest
+  # ============================================================================
+  
+  DynamoDBEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: 'Customer-managed KMS key for DynamoDB table encryption'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          
+          - Sid: Allow DynamoDB Service to Use Key
+            Effect: Allow
+            Principal:
+              Service: dynamodb.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+              - 'kms:CreateGrant'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService': !Sub 'dynamodb.${AWS::Region}.amazonaws.com'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-dynamodb-key'
+        - Key: Purpose
+          Value: 'DynamoDB encryption'
+
+  DynamoDBEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-dynamodb'
+      TargetKeyId: !Ref DynamoDBEncryptionKey
+
+  S3EncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: 'Customer-managed KMS key for S3 bucket encryption'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          
+          - Sid: Allow S3 Service to Use Key
+            Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:GenerateDataKey'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-s3-key'
+        - Key: Purpose
+          Value: 'S3 encryption'
+
+  S3EncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-s3'
+      TargetKeyId: !Ref S3EncryptionKey
+
+  BedrockEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: 'Customer-managed KMS key for Bedrock Agent encryption'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          
+          - Sid: Allow Bedrock Service to Use Key
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+              - 'kms:CreateGrant'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService': !Sub 'bedrock.${AWS::Region}.amazonaws.com'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-bedrock-key'
+        - Key: Purpose
+          Value: 'Bedrock Agent encryption'
+
+  BedrockEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-bedrock'
+      TargetKeyId: !Ref BedrockEncryptionKey
+
+  LambdaEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: 'Customer-managed KMS key for Lambda environment variable encryption'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          
+          - Sid: Allow Lambda Service to Use Key
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService': !Sub 'lambda.${AWS::Region}.amazonaws.com'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lambda-key'
+        - Key: Purpose
+          Value: 'Lambda environment variable encryption'
+
+  LambdaEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-lambda'
+      TargetKeyId: !Ref LambdaEncryptionKey
+
+  CloudWatchLogsEncryptionKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: 'Customer-managed KMS key for CloudWatch Logs encryption'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          
+          - Sid: Allow CloudWatch Logs Service to Use Key
+            Effect: Allow
+            Principal:
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+            Action:
+              - 'kms:Encrypt'
+              - 'kms:Decrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - 'kms:CreateGrant'
+              - 'kms:DescribeKey'
+            Resource: '*'
+            Condition:
+              ArnLike:
+                'kms:EncryptionContext:aws:logs:arn': !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-cloudwatch-logs-key'
+        - Key: Purpose
+          Value: 'CloudWatch Logs encryption'
+
+  CloudWatchLogsEncryptionKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-cloudwatch-logs'
+      TargetKeyId: !Ref CloudWatchLogsEncryptionKey
+
+  # ============================================================================
+  # S3 Buckets for Access Logs
+  # ============================================================================
+  
+  S3AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-s3-access-logs-${UniqueSuffix}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 90
+            NoncurrentVersionExpirationInDays: 30
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-s3-access-logs'
+        - Key: Purpose
+          Value: 'S3 access logs storage'
+
+  S3AccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3AccessLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt S3AccessLogsBucket.Arn
+              - !Sub '${S3AccessLogsBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+          
+          - Sid: S3ServerAccessLogsPolicy
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action: 's3:PutObject'
+            Resource: !Sub '${S3AccessLogsBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+
+  # ============================================================================
+  # S3 Buckets for Deployment Artifacts
+  # ============================================================================
+  
+  LambdaLayerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-lambda-layer-${UniqueSuffix}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt S3EncryptionKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucket
+        LogFilePrefix: lambda-layer-bucket/
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lambda-layer'
+        - Key: Purpose
+          Value: 'Lambda layer storage'
+
+  LambdaLayerBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LambdaLayerBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt LambdaLayerBucket.Arn
+              - !Sub '${LambdaLayerBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+  ReactCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-react-code-${UniqueSuffix}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt S3EncryptionKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucket
+        LogFilePrefix: react-code-bucket/
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-react-code'
+        - Key: Purpose
+          Value: 'React application code storage'
+
+  ReactCodeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ReactCodeBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt ReactCodeBucket.Arn
+              - !Sub '${ReactCodeBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+  CloudFormationTemplatesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-cfn-templates-${UniqueSuffix}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt S3EncryptionKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucket
+        LogFilePrefix: cfn-templates-bucket/
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-cfn-templates'
+        - Key: Purpose
+          Value: 'CloudFormation templates storage'
+
+  CloudFormationTemplatesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudFormationTemplatesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt CloudFormationTemplatesBucket.Arn
+              - !Sub '${CloudFormationTemplatesBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+  # ============================================================================
+  # S3 Buckets for Application Data
+  # ============================================================================
+  
+  PersonaS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-persona-${UniqueSuffix}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt S3EncryptionKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucket
+        LogFilePrefix: persona-bucket/
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedOrigins:
+              - "*"
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-persona'
+        - Key: Purpose
+          Value: 'Persona documents storage'
+
+  PersonaS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PersonaS3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt PersonaS3Bucket.Arn
+              - !Sub '${PersonaS3Bucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+  # ============================================================================
+  # Knowledge Base S3 Bucket
+  # ============================================================================
+  
+  KnowledgeBaseS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-kb-docs-${UniqueSuffix}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt S3EncryptionKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucket
+        LogFilePrefix: kb-docs-bucket/
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedOrigins:
+              - "*"
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-kb-docs'
+        - Key: Purpose
+          Value: 'Knowledge base documents storage'
+
+  KnowledgeBaseS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref KnowledgeBaseS3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt KnowledgeBaseS3Bucket.Arn
+              - !Sub '${KnowledgeBaseS3Bucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+  UICodeS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-ui-code-${UniqueSuffix}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt S3EncryptionKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucket
+        LogFilePrefix: ui-code-bucket/
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ui-code'
+        - Key: Purpose
+          Value: 'UI code storage'
+
+  UICodeS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UICodeS3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt UICodeS3Bucket.Arn
+              - !Sub '${UICodeS3Bucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+  # ============================================================================
+  # SQS Dead Letter Queue for Lambda Functions
+  # ============================================================================
+  
+  LambdaDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-lambda-dlq'
+      MessageRetentionPeriod: 1209600  # 14 days
+      KmsMasterKeyId: alias/aws/sqs
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lambda-dlq'
+        - Key: Purpose
+          Value: 'Lambda dead letter queue'
+
+  LambdaDLQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref LambdaDLQ
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowLambdaToSendMessages
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - 'sqs:SendMessage'
+            Resource: !GetAtt LambdaDLQ.Arn
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+
+# ============================================================================
+# Outputs - These are passed as parameters to dependent stacks
+# ============================================================================
+
+Outputs:
+  DynamoDBKMSKeyId:
+    Description: 'KMS key ID for DynamoDB encryption'
+    Value: !Ref DynamoDBEncryptionKey
+    Export:
+      Name: !Sub '${AWS::StackName}-DynamoDBKMSKeyId'
+
+  DynamoDBKMSKeyArn:
+    Description: 'KMS key ARN for DynamoDB encryption (for IAM policies)'
+    Value: !GetAtt DynamoDBEncryptionKey.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DynamoDBKMSKeyArn'
+
+  S3KMSKeyId:
+    Description: 'KMS key ID for S3 encryption'
+    Value: !Ref S3EncryptionKey
+    Export:
+      Name: !Sub '${AWS::StackName}-S3KMSKeyId'
+
+  S3KMSKeyArn:
+    Description: 'KMS key ARN for S3 encryption (for IAM policies)'
+    Value: !GetAtt S3EncryptionKey.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-S3KMSKeyArn'
+
+  BedrockKMSKeyArn:
+    Description: 'KMS key ARN for Bedrock Agent encryption'
+    Value: !GetAtt BedrockEncryptionKey.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BedrockKMSKeyArn'
+
+  LambdaKMSKeyArn:
+    Description: 'KMS key ARN for Lambda environment variable encryption'
+    Value: !GetAtt LambdaEncryptionKey.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaKMSKeyArn'
+
+  CloudWatchLogsKMSKeyArn:
+    Description: 'KMS key ARN for CloudWatch Logs encryption'
+    Value: !GetAtt CloudWatchLogsEncryptionKey.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudWatchLogsKMSKeyArn'
+
+  S3AccessLogsBucket:
+    Description: 'S3 bucket name for S3 access logs'
+    Value: !Ref S3AccessLogsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3AccessLogsBucket'
+
+  S3AccessLogsBucketArn:
+    Description: 'S3 bucket ARN for S3 access logs'
+    Value: !GetAtt S3AccessLogsBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-S3AccessLogsBucketArn'
+
+  LambdaDLQArn:
+    Description: 'ARN of Lambda dead letter queue'
+    Value: !GetAtt LambdaDLQ.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaDLQArn'
+
+  LambdaDLQUrl:
+    Description: 'URL of Lambda dead letter queue'
+    Value: !Ref LambdaDLQ
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaDLQUrl'
+
+  LambdaLayerBucket:
+    Description: 'S3 bucket name for Lambda layers'
+    Value: !Ref LambdaLayerBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaLayerBucket'
+
+  LambdaLayerBucketArn:
+    Description: 'S3 bucket ARN for Lambda layers'
+    Value: !GetAtt LambdaLayerBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaLayerBucketArn'
+
+  ReactCodeBucket:
+    Description: 'S3 bucket name for React application code'
+    Value: !Ref ReactCodeBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ReactCodeBucket'
+
+  ReactCodeBucketArn:
+    Description: 'S3 bucket ARN for React application code'
+    Value: !GetAtt ReactCodeBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ReactCodeBucketArn'
+
+  CloudFormationTemplatesBucket:
+    Description: 'S3 bucket name for CloudFormation templates'
+    Value: !Ref CloudFormationTemplatesBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFormationTemplatesBucket'
+
+  CloudFormationTemplatesBucketArn:
+    Description: 'S3 bucket ARN for CloudFormation templates'
+    Value: !GetAtt CloudFormationTemplatesBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFormationTemplatesBucketArn'
+
+  PersonaS3Bucket:
+    Description: 'S3 bucket name for persona documents'
+    Value: !Ref PersonaS3Bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-PersonaS3Bucket'
+
+  PersonaS3BucketArn:
+    Description: 'S3 bucket ARN for persona documents'
+    Value: !GetAtt PersonaS3Bucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-PersonaS3BucketArn'
+
+  KnowledgeBaseS3Bucket:
+    Description: 'S3 bucket name for knowledge base documents'
+    Value: !Ref KnowledgeBaseS3Bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseS3Bucket'
+
+  KnowledgeBaseS3BucketArn:
+    Description: 'S3 bucket ARN for knowledge base documents'
+    Value: !GetAtt KnowledgeBaseS3Bucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-KnowledgeBaseS3BucketArn'
+
+  UICodeS3Bucket:
+    Description: 'S3 bucket name for UI code'
+    Value: !Ref UICodeS3Bucket
+    Export:
+      Name: !Sub '${AWS::StackName}-UICodeS3Bucket'
+
+  UICodeS3BucketArn:
+    Description: 'S3 bucket ARN for UI code'
+    Value: !GetAtt UICodeS3Bucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-UICodeS3BucketArn'
+
+  UICodeS3BucketDomainName:
+    Description: 'S3 bucket regional domain name for UI code'
+    Value: !GetAtt UICodeS3Bucket.RegionalDomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-UICodeS3BucketDomainName'

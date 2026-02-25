@@ -1,0 +1,9 @@
+node_modules/
+stackroot-packaged.yaml
+reactapplication.zip
+package-lock.json
+.DS_Store
+.env.local*
+build/
+Infrastructure/vpc-config.json
+.kiro/

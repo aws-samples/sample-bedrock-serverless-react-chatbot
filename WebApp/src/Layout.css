@@ -1,0 +1,56 @@
+/* Update layout-wrapper */
+.layout-wrapper {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0; /* Remove the padding */
+}
+
+/* Add padding to the bottom of the side navigation */
+.awsui-side-navigation {
+  padding-bottom: 60px !important;
+}
+
+.awsui-app-layout__content {
+  overflow: hidden !important;
+  height: calc(100vh - 40px);
+}
+
+.custom-layout-content {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sticky-top-nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.chat-ui-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-bottom: 20px;
+  width: 100%;
+}
+
+/* Add styling for the website crawler content */
+.website-crawler-content {
+  padding: 0 20px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+/* Add padding to all content containers */
+.content-container {
+  padding: 0 20px;
+  width: 80%;
+  max-width: 1000px;
+  margin: 0 auto;
+}

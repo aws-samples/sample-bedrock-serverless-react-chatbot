@@ -1,0 +1,85 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'WAF WebACL for CloudFront Distribution - MUST be deployed in us-east-1 region'
+
+# IMPORTANT: This stack MUST be deployed in us-east-1 region
+# CloudFront WAF WebACLs can only be created in us-east-1
+# Deploy this stack first, then pass the WebACL ARN to the CloudFront stack
+
+Parameters:
+  StackName:
+    Type: String
+    Description: Name prefix for the WAF resources (should match your main stack name)
+
+Resources:
+  CloudFrontWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub '${StackName}-cloudfront-waf'
+      Scope: CLOUDFRONT
+      Description: 'WAF Web ACL for CloudFront distribution with rate limiting and managed rules'
+      DefaultAction:
+        Allow: {}
+      Rules:
+        # Rate limiting rule - 2000 requests per 5 minutes per IP
+        - Name: RateLimitRule
+          Priority: 1
+          Statement:
+            RateBasedStatement:
+              Limit: 2000
+              AggregateKeyType: IP
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
+        
+        # AWS Managed Rules - Core Rule Set
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesCommonRuleSet
+        
+        # AWS Managed Rules - Known Bad Inputs
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesKnownBadInputsRuleSet
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub '${StackName}-cloudfront-waf'
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackName}-cloudfront-waf'
+        - Key: Purpose
+          Value: 'CloudFront WAF protection'
+
+Outputs:
+  WebACLArn:
+    Description: 'ARN of the WAF WebACL - pass this to the CloudFront stack as WebACLArn parameter'
+    Value: !GetAtt CloudFrontWebACL.Arn
+    Export:
+      Name: !Sub '${StackName}-CloudFrontWebACLArn'
+  
+  WebACLId:
+    Description: 'ID of the WAF WebACL'
+    Value: !Ref CloudFrontWebACL

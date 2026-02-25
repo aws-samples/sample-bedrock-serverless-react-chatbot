@@ -1,0 +1,38 @@
+{
+  "models": {
+    "anthropic": {
+      "claude-3-opus": {
+        "input": {
+          "price": 0.015,
+          "currency": "USD"
+        },
+        "output": {
+          "price": 0.075,
+          "currency": "USD"
+        }
+      },
+      "claude-3-sonnet": {
+        "input": {
+          "price": 0.003,
+          "currency": "USD"
+        },
+        "output": {
+          "price": 0.015,
+          "currency": "USD"
+        }
+      },
+      "claude-3-haiku": {
+        "input": {
+          "price": 0.0008,
+          "currency": "USD"
+        },
+        "output": {
+          "price": 0.004,
+          "currency": "USD"
+        }
+      }
+    }
+  },
+  "last_updated": "2023-07-01",
+  "disclaimer": "Pricing information is subject to change. Please refer to the official AWS Bedrock pricing page for the most up-to-date information."
+}

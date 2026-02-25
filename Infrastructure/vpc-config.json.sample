@@ -1,0 +1,12 @@
+{
+  "vpcId": "vpc-XXXXXXXXXXXXXXXXX",
+  "vpceUrls": {
+    "executeApi": "vpce-XXXXXXXXXXXXXXXXX-XXXXXXXX.execute-api.<region>.vpce.amazonaws.com",
+    "dynamodb": "vpce-XXXXXXXXXXXXXXXXX-XXXXXXXX.dynamodb.<region>.vpce.amazonaws.com",
+    "bedrock": "vpce-XXXXXXXXXXXXXXXXX-XXXXXXXX.bedrock.<region>.vpce.amazonaws.com",
+    "bedrockRuntime": "vpce-XXXXXXXXXXXXXXXXX-XXXXXXXX.bedrock-runtime.<region>.vpce.amazonaws.com",
+    "bedrockAgent": "vpce-XXXXXXXXXXXXXXXXX-XXXXXXXX.bedrock-agent.<region>.vpce.amazonaws.com",
+    "bedrockAgentRuntime": "vpce-XXXXXXXXXXXXXXXXX-XXXXXXXX.bedrock-agent-runtime.<region>.vpce.amazonaws.com",
+    "s3": "vpce-XXXXXXXXXXXXXXXXX-XXXXXXXX.s3.<region>.vpce.amazonaws.com"
+  }
+}

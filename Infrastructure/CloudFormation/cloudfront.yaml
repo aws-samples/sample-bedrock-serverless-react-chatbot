@@ -1,0 +1,373 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFront Distribution stack
+
+Parameters:
+  # Foundation Stack Outputs
+  S3AccessLogsBucket:
+    Type: String
+    Description: S3 bucket name for CloudFront access logs from Foundation stack
+  
+  S3KMSKeyId:
+    Type: String
+    Description: KMS Key ID for S3 bucket encryption from Foundation stack
+  
+  LambdaDLQArn:
+    Type: String
+    Description: ARN of Lambda Dead Letter Queue from Foundation stack
+  
+  LambdaKMSKeyArn:
+    Type: String
+    Description: ARN of KMS key for Lambda environment variable encryption from Foundation stack
+
+  UniqueSuffix:
+    Type: String
+    Description: 'Deterministic hash suffix for S3 bucket names (avoids exposing AWS account ID)'
+    AllowedPattern: '[a-f0-9]{8}'
+    ConstraintDescription: 'Must be an 8-character lowercase hex string'
+  
+  # CICD Stack Outputs
+  UICodeS3Bucket:
+    Type: String
+    Description: S3 bucket name for UI code from CICD stack
+  UICodeS3BucketDomainName:
+    Type: String
+    Description: S3 bucket regional domain name from CICD stack
+  UICodeS3BucketArn:
+    Type: String
+    Description: S3 bucket ARN from CICD stack
+  
+  # Optional WAF WebACL ARN (must be created in us-east-1 separately)
+  # See CLOUDFRONT_WAF_DEPLOYMENT.md for deployment instructions
+  # WAFv2 WebACLs for CloudFront MUST be created in us-east-1 region
+  # Deploy cloudfront-waf.yaml in us-east-1 first, then pass the ARN here
+  WebACLArn:
+    Type: String
+    Description: Optional ARN of WAFv2 WebACL for CloudFront (must be created in us-east-1)
+    Default: ''
+
+Conditions:
+  HasWebACL: !Not [!Equals [!Ref WebACLArn, '']]
+
+Resources:
+  # ============================================================================
+  # CloudFront Logs Resources
+  # ============================================================================
+
+  CloudFrontLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-cloudfront-logs-${UniqueSuffix}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucket
+        LogFilePrefix: cloudfront-logs-bucket/
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 90
+            NoncurrentVersionExpirationInDays: 30
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-cloudfront-logs'
+        - Key: Purpose
+          Value: 'CloudFront access logs storage'
+
+  CloudFrontLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudFrontLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt CloudFrontLogsBucket.Arn
+              - !Sub '${CloudFrontLogsBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+          
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: 's3:PutObject'
+            Resource: !Sub '${CloudFrontLogsBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+
+  # ============================================================================
+  # CloudFront Response Headers Policy for Security Headers
+  # ============================================================================
+  
+  CloudFrontResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub '${AWS::StackName}-security-headers'
+        Comment: 'Security headers policy for CloudFront distribution'
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          XSSProtection:
+            ModeBlock: true
+            Protection: true
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: 'strict-origin-when-cross-origin'
+            Override: true
+
+  # ============================================================================
+  # CloudFront Distribution
+  # ============================================================================
+  
+  CloudFrontDistribution:
+    Type: "AWS::CloudFront::Distribution"
+    Properties:
+      DistributionConfig: 
+        Origins: 
+          - ConnectionAttempts: 3
+            ConnectionTimeout: 10
+            DomainName: !Ref UICodeS3BucketDomainName
+            Id: !Sub "${AWS::StackName}-cf-distro"
+            OriginPath: ""
+            S3OriginConfig: {}
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControl.Id
+        DefaultCacheBehavior: 
+          AllowedMethods: 
+            - "HEAD"
+            - "GET"
+          CachedMethods: 
+            - "HEAD"
+            - "GET"
+          Compress: true
+          CachePolicyId: "658327ea-f89d-4fab-a63d-7e88639e58f6"
+          ResponseHeadersPolicyId: !Ref CloudFrontResponseHeadersPolicy
+          SmoothStreaming: false
+          TargetOriginId: !Sub "${AWS::StackName}-cf-distro"
+          ViewerProtocolPolicy: "redirect-to-https"
+        Comment: !Sub "${AWS::StackName} CloudFront Distribution"
+        PriceClass: "PriceClass_All"
+        Enabled: true
+        ViewerCertificate: 
+          CloudFrontDefaultCertificate: true
+          MinimumProtocolVersion: "TLSv1.2_2021"
+        Restrictions: 
+          GeoRestriction: 
+            RestrictionType: "none"
+        HttpVersion: "http2and3"
+        DefaultRootObject: "index.html"
+        IPV6Enabled: true
+        WebACLId: !If [HasWebACL, !Ref WebACLArn, !Ref 'AWS::NoValue']
+        Logging:
+          Bucket: !Sub '${CloudFrontLogsBucket}.s3.amazonaws.com'
+          IncludeCookies: true
+          Prefix: !Sub '${AWS::StackName}/'
+
+  CloudFrontOriginAccessControl:
+    Type: "AWS::CloudFront::OriginAccessControl"
+    Properties:
+      OriginAccessControlConfig: 
+        Name: !Sub "${AWS::StackName}-cf-distro"
+        OriginAccessControlOriginType: "s3"
+        SigningBehavior: "always"
+        SigningProtocol: "sigv4"
+
+  # ============================================================================
+  # Lambda Function to Update KMS Key Policy for CloudFront
+  # ============================================================================
+  
+  KMSKeyPolicyUpdateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: KMSKeyPolicyUpdate
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:GetKeyPolicy
+                  - kms:PutKeyPolicy
+                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/${S3KMSKeyId}'
+        - PolicyName: SQSSendMessageToDLQ
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource:
+                  - !Ref LambdaDLQArn
+
+  KMSKeyPolicyUpdateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-kms-policy-updater'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt KMSKeyPolicyUpdateRole.Arn
+      Timeout: 60
+      # Limit concurrent executions to prevent runaway costs and resource exhaustion
+      # Set to 1 for custom resource Lambda - only runs during stack create/update/delete
+      ReservedConcurrentExecutions: 1
+      KmsKeyArn: !Ref LambdaKMSKeyArn
+      DeadLetterConfig:
+        TargetArn: !Ref LambdaDLQArn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          
+          kms = boto3.client('kms')
+          
+          def handler(event, context):
+              try:
+                  key_id = event['ResourceProperties']['KeyId']
+                  distribution_arn = event['ResourceProperties']['DistributionArn']
+                  request_type = event['RequestType']
+                  
+                  # Get current key policy
+                  response = kms.get_key_policy(KeyId=key_id, PolicyName='default')
+                  policy = json.loads(response['Policy'])
+                  
+                  cloudfront_statement = {
+                      'Sid': 'AllowCloudFrontToDecryptS3Objects',
+                      'Effect': 'Allow',
+                      'Principal': {
+                          'Service': 'cloudfront.amazonaws.com'
+                      },
+                      'Action': [
+                          'kms:Decrypt',
+                          'kms:DescribeKey'
+                      ],
+                      'Resource': '*',
+                      'Condition': {
+                          'StringEquals': {
+                              'aws:SourceArn': distribution_arn
+                          }
+                      }
+                  }
+                  
+                  if request_type in ['Create', 'Update']:
+                      # Remove existing CloudFront statement if present
+                      policy['Statement'] = [s for s in policy['Statement'] 
+                                            if s.get('Sid') != 'AllowCloudFrontToDecryptS3Objects']
+                      # Add new statement
+                      policy['Statement'].append(cloudfront_statement)
+                      
+                      # Update key policy
+                      kms.put_key_policy(
+                          KeyId=key_id,
+                          PolicyName='default',
+                          Policy=json.dumps(policy)
+                      )
+                      print(f'Added CloudFront permission to KMS key policy for distribution: {distribution_arn}')
+                  
+                  elif request_type == 'Delete':
+                      # Remove CloudFront statement
+                      policy['Statement'] = [s for s in policy['Statement'] 
+                                            if s.get('Sid') != 'AllowCloudFrontToDecryptS3Objects']
+                      
+                      # Update key policy
+                      kms.put_key_policy(
+                          KeyId=key_id,
+                          PolicyName='default',
+                          Policy=json.dumps(policy)
+                      )
+                      print(f'Removed CloudFront permission from KMS key policy')
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              
+              except Exception as e:
+                  print(f'Error: {str(e)}')
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  KMSKeyPolicyUpdate:
+    Type: Custom::KMSKeyPolicyUpdate
+    DependsOn: CloudFrontDistribution
+    Properties:
+      ServiceToken: !GetAtt KMSKeyPolicyUpdateFunction.Arn
+      KeyId: !Ref S3KMSKeyId
+      DistributionArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UICodeS3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Id: !Sub "${AWS::StackName}-PolicyForCloudFrontPrivateContent"
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${UICodeS3BucketArn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub "${UICodeS3BucketArn}"
+              - !Sub "${UICodeS3BucketArn}/*"
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+
+Outputs:
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CloudFrontDistribution
+  CloudFrontDomainName:
+    Description: CloudFront Distribution Domain Name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+  CloudFrontLogsBucket:
+    Description: 'S3 bucket name for CloudFront access logs'
+    Value: !Ref CloudFrontLogsBucket
+  CloudFrontLogsBucketArn:
+    Description: 'S3 bucket ARN for CloudFront access logs'
+    Value: !GetAtt CloudFrontLogsBucket.Arn

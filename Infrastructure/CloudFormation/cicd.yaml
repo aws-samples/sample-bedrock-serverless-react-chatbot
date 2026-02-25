@@ -1,0 +1,315 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CI/CD Pipeline with CodePipeline, CodeCommit, and CodeBuild using EventBridge
+
+Parameters:
+  # Foundation Stack Outputs
+  S3KMSKeyId:
+    Type: String
+    Description: KMS key ID for S3 encryption from Foundation stack - DELETE ME
+  S3KMSKeyArn:
+    Type: String
+    Description: KMS key ARN for S3 encryption from Foundation stack (for IAM policies)
+  S3AccessLogsBucket:
+    Type: String
+    Description: S3 bucket name for access logs from Foundation stack
+  UICodeS3BucketName:
+    Type: String
+    Description: S3 bucket name for UI code from Foundation stack
+  UICodeS3BucketArn:
+    Type: String
+    Description: S3 bucket ARN for UI code from Foundation stack
+  UICodeS3BucketDomainName:
+    Type: String
+    Description: S3 bucket regional domain name for UI code from Foundation stack
+  
+  # Cognito Stack Outputs
+  CognitoIdentityPoolId:
+    Type: String
+    Description: Cognito Identity Pool ID from Cognito stack
+  CognitoUserPoolId:
+    Type: String
+    Description: Cognito User Pool ID from Cognito stack
+  CognitoUserPoolClientId:
+    Type: String
+    Description: Cognito User Pool Client ID from Cognito stack
+  
+  # Config API
+  ConfigApiUrl:
+    Type: String
+    Description: Config API Gateway endpoint URL
+
+  # User-provided Parameters
+  CodeS3BucketName:
+    Type: String
+    Description: Name of the S3 bucket containing source code
+  SourceObjectKey:
+    Type: String
+    Description: S3 key for the source code zip file
+    Default: reactapplication.zip
+Resources:
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: !Sub ${AWS::StackName}-CodeBuildProject
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 22
+              commands:
+                - npm install
+
+            build:
+              commands:
+                - npm run build
+
+            post_build:
+              commands:
+                - aws s3 sync build/ s3://${S3_BUCKET}/
+
+      Environment:
+        EnvironmentVariables:
+          - Name: S3_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref UICodeS3BucketName
+          - Name: VITE_AWS_REGION
+            Type: PLAINTEXT
+            Value: !Ref AWS::Region
+          - Name: VITE_AMAZON_COGNITO_IDENTITY_POOL_ID
+            Type: PLAINTEXT
+            Value: !Ref CognitoIdentityPoolId
+          - Name: VITE_AMAZON_COGNITO_USER_POOL_ID
+            Type: PLAINTEXT
+            Value: !Ref CognitoUserPoolId
+          - Name: VITE_AMAZON_COGNITO_USER_POOL_WEB_CLIENT_ID
+            Type: PLAINTEXT
+            Value: !Ref CognitoUserPoolClientId
+          - Name: VITE_CONFIG_API_URL
+            Type: PLAINTEXT
+            Value: !Ref ConfigApiUrl
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        Type: LINUX_CONTAINER
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref UICodeS3BucketName
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              Configuration:
+                S3Bucket: !Ref CodeS3BucketName
+                S3ObjectKey: !Ref SourceObjectKey
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref CodeBuildRolePolicy
+
+  CodeBuildRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'CodeBuildRolePolicy-${AWS::StackName}'
+      Description: 'Managed policy for CodeBuild role with S3 and CloudWatch Logs access'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: S3UICodeBucketAccess
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObject
+              - s3:ListBucket
+              - s3:GetBucketLocation
+              - s3:GetBucketVersioning
+            Resource: 
+              - !Ref UICodeS3BucketArn
+              - !Sub '${UICodeS3BucketArn}/*'
+          - Sid: KMSKeyAccess
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:GenerateDataKey
+            Resource:
+              - !Ref S3KMSKeyArn
+          - Sid: CloudWatchLogsCreateLogGroup
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+            Resource: 
+              - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-CodeBuildProject'
+              - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-CodeBuildProject:*'
+          - Sid: CloudWatchLogsWriteLogs
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: 
+              - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-CodeBuildProject:*'
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref CodePipelineRolePolicy
+
+  CodePipelineRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'CodePipelineRolePolicy-${AWS::StackName}'
+      Description: 'Managed policy for CodePipeline role with CodeBuild, S3, and CloudFormation access'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CodeBuildProjectAccess
+            Effect: Allow
+            Action:
+              - codebuild:BatchGetBuilds
+              - codebuild:StartBuild
+            Resource:
+              - !GetAtt CodeBuildProject.Arn
+          - Sid: S3ArtifactBucketAccess
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:ListBucket
+              - s3:PutObject
+              - s3:GetBucketLocation
+              - s3:GetBucketVersioning
+            Resource:
+              - !Ref UICodeS3BucketArn
+              - !Sub '${UICodeS3BucketArn}/*'
+              - !Sub 'arn:${AWS::Partition}:s3:::${CodeS3BucketName}'
+              - !Sub 'arn:${AWS::Partition}:s3:::${CodeS3BucketName}/*'
+          - Sid: KMSKeyAccess
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:GenerateDataKey
+            Resource:
+              - !Ref S3KMSKeyArn
+
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref EventBridgeRolePolicy
+
+  EventBridgeRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub 'EventBridgeRolePolicy-${AWS::StackName}'
+      Description: 'Managed policy for EventBridge role to trigger CodePipeline'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CodePipelineStartExecution
+            Effect: Allow
+            Action:
+              - codepipeline:StartPipelineExecution
+            Resource: 
+              - !Sub 'arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipeline}'
+
+  S3CommitTrigger:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - Object Created
+        detail:
+          bucket:
+            name:
+              - !Ref CodeS3BucketName
+          object:
+            key:
+              - !Ref SourceObjectKey
+      Targets:
+        - Arn: !Sub arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipeline}
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Id: TriggerPipeline
+
+Outputs:
+  PipelineName:
+    Description: Name of the created CodePipeline
+    Value: !Ref CodePipeline
+  UICodeS3Bucket:
+    Description: S3 bucket hosting React application
+    Value: !Ref UICodeS3BucketName
+  UICodeS3BucketDomainName:
+    Description: S3 bucket regional domain name used by CloudFront
+    Value: !Ref UICodeS3BucketDomainName
+  UICodeS3BucketArn:
+    Description: S3 bucket ARN
+    Value: !Ref UICodeS3BucketArn

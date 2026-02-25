@@ -1,0 +1,235 @@
+/* Document Viewer Modal */
+.doc-viewer-modal-body {
+  display: flex;
+  flex-direction: column;
+  height: calc(80vh - 120px);
+  min-height: 400px;
+  overflow: hidden;
+}
+
+/* Citation navigation is handled by Cloudscape Alert component */
+
+/* Highlight styles */
+.doc-viewer-highlight {
+  background-color: #fff3b0;
+  border-bottom: 2px solid #f5a623;
+  padding: 1px 2px;
+  border-radius: 2px;
+  transition: background-color 0.2s;
+}
+
+.doc-viewer-highlight:hover {
+  background-color: #ffe066;
+}
+
+.doc-viewer-highlight.doc-viewer-highlight-active {
+  background-color: #ffe066;
+  outline: 2px solid #f5a623;
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* PDF highlight in text layer */
+.doc-viewer-pdf-highlight {
+  background-color: rgba(255, 243, 176, 0.5) !important;
+  border-bottom: 2px solid #f5a623;
+  border-radius: 2px;
+}
+
+.doc-viewer-pdf-highlight.doc-viewer-pdf-highlight-active {
+  background-color: rgba(255, 224, 102, 0.7) !important;
+  outline: 2px solid #f5a623;
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* PDF Viewer */
+.doc-viewer-pdf-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.doc-viewer-pdf-toolbar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #fafafa;
+  border: 1px solid #e9ebed;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.doc-viewer-toolbar-btn {
+  background: none;
+  border: 1px solid #e9ebed;
+  border-radius: 4px;
+  padding: 4px 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.doc-viewer-toolbar-btn:hover:not(:disabled) {
+  background: #e9ebed;
+}
+
+.doc-viewer-toolbar-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.doc-viewer-toolbar-text {
+  font-size: 13px;
+  color: #545b64;
+}
+
+.doc-viewer-toolbar-divider {
+  color: #d1d5db;
+  margin: 0 2px;
+}
+
+.doc-viewer-pdf-scroll {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  background: var(--color-background-layout-main, #f5f5f5);
+  border-radius: 4px;
+  padding: 16px;
+}
+
+.doc-viewer-pdf-scroll .react-pdf__Document {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.doc-viewer-pdf-scroll .react-pdf__Page {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  background: white;
+}
+
+/*
+ * Document content viewers - always light mode.
+ * Documents should render as they would on paper.
+ */
+.doc-viewer-docx-content {
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+  background: white;
+  color: #000716;
+  border: 1px solid #e9ebed;
+  border-radius: 4px;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.doc-viewer-docx-content img {
+  max-width: 100%;
+  height: auto;
+}
+
+.doc-viewer-docx-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.doc-viewer-docx-content table td,
+.doc-viewer-docx-content table th {
+  border: 1px solid #ddd;
+  padding: 8px;
+  color: #000716;
+}
+
+/* Text/Markdown Viewer */
+.doc-viewer-text-content {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+  background: white;
+  color: #000716;
+  border: 1px solid #e9ebed;
+  border-radius: 4px;
+  font-family: 'Fira Code', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin: 0;
+}
+
+/* HTML Viewer */
+.doc-viewer-html-content {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+  background: white;
+  color: #000716;
+  border: 1px solid #e9ebed;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* CSV Viewer */
+.doc-viewer-csv-container {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid #e9ebed;
+  border-radius: 4px;
+  background: white;
+  color: #000716;
+}
+
+.doc-viewer-csv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.doc-viewer-csv-table th {
+  background: #fafafa;
+  color: #000716;
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid #e9ebed;
+  position: sticky;
+  top: 0;
+}
+
+.doc-viewer-csv-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #e9ebed;
+  color: #000716;
+}
+
+.doc-viewer-csv-table tr:hover td {
+  background: #f2f3f3;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .doc-viewer-modal-body {
+    height: calc(90vh - 100px);
+  }
+
+  .doc-viewer-pdf-scroll {
+    padding: 8px;
+  }
+
+  .doc-viewer-docx-content,
+  .doc-viewer-text-content {
+    padding: 12px;
+  }
+}

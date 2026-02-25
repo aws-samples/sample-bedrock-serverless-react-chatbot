@@ -1,0 +1,786 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: "Config API Gateway Stack - SSM Parameter Store backed configuration API with Lambda, Cognito auth, and WAF protection"
+
+Parameters:
+  # Foundation Stack Outputs
+  LambdaKMSKeyArn:
+    Type: String
+    Description: KMS key ARN for Lambda environment variable encryption from Foundation stack
+  CloudWatchLogsKMSKeyArn:
+    Type: String
+    Description: KMS key ARN for CloudWatch Logs encryption from Foundation stack
+  LambdaDLQArn:
+    Type: String
+    Description: Lambda dead letter queue ARN from Foundation stack
+
+  # Cognito Stack Outputs
+  CognitoUserPoolId:
+    Type: String
+    Description: Cognito User Pool ID for API Gateway authorizer validation
+  CognitoUserPoolClientId:
+    Type: String
+    Description: Cognito User Pool Client ID for API Gateway authorizer audience
+
+  # User-provided Parameters
+  APIGatewayEndpointType:
+    Type: String
+    Description: Endpoint type for the API Gateway (PRIVATE or REGIONAL)
+    Default: REGIONAL
+  VpcId:
+    Type: String
+    Description: VPC ID for PRIVATE endpoint type (required for PRIVATE endpoints)
+    Default: ""
+  ExecuteApiVpceId:
+    Type: String
+    Description: VPC Endpoint ID for execute-api (required for PRIVATE endpoints to associate the VPCE)
+    Default: ""
+
+  # Bedrock Parameters (16)
+  BedrockAgentId:
+    Type: String
+    Description: Bedrock Agent ID
+  BedrockAgentAliasId:
+    Type: String
+    Description: Bedrock Agent Alias ID
+  BedrockAgentName:
+    Type: String
+    Description: Bedrock Agent name
+  BedrockAgentResourceRoleArn:
+    Type: String
+    Description: ARN of the Bedrock Agent Resource role
+  BedrockKnowledgeBaseId:
+    Type: String
+    Description: Bedrock Knowledge Base ID
+  BedrockDataSourceId:
+    Type: String
+    Description: Bedrock Data Source ID
+  BedrockKnowledgeBaseS3Bucket:
+    Type: String
+    Description: S3 bucket name for knowledge base documents
+  BedrockPersonaS3Bucket:
+    Type: String
+    Description: S3 bucket name for persona documents
+  BedrockDefaultChatType:
+    Type: String
+    Description: Default chat type for LLM requests
+    Default: LLM
+  BedrockDefaultModelId:
+    Type: String
+    Description: Default foundation model ID
+  BedrockDefaultModelProvider:
+    Type: String
+    Description: Default foundation model provider name
+    Default: Anthropic
+  BedrockDefaultModelName:
+    Type: String
+    Description: Default foundation model display name
+    Default: "NONE"
+  BedrockMaxTokens:
+    Type: String
+    Description: Maximum tokens for model responses
+    Default: "4096"
+  BedrockDefaultModelStream:
+    Type: String
+    Description: Whether to stream responses from foundation model
+    Default: "true"
+  BedrockGuardrailId:
+    Type: String
+    Description: Optional Bedrock Guardrail ID
+    Default: "NONE"
+  BedrockGuardrailVersion:
+    Type: String
+    Description: Optional Bedrock Guardrail version
+    Default: "NONE"
+
+  # DynamoDB Parameters (2)
+  ConvHistoryTable:
+    Type: String
+    Description: DynamoDB table name for User Conversation History
+  PersonaTable:
+    Type: String
+    Description: DynamoDB table name for User Personas
+
+  # VPCE Parameters (7)
+  VpceDynamodb:
+    Type: String
+    Description: VPC Endpoint URL for DynamoDB
+    Default: "NONE"
+  VpceBedrock:
+    Type: String
+    Description: VPC Endpoint URL for Bedrock
+    Default: "NONE"
+  VpceBedrockRuntime:
+    Type: String
+    Description: VPC Endpoint URL for Bedrock Runtime
+    Default: "NONE"
+  VpceBedrockAgent:
+    Type: String
+    Description: VPC Endpoint URL for Bedrock Agent
+    Default: "NONE"
+  VpceBedrockAgentRuntime:
+    Type: String
+    Description: VPC Endpoint URL for Bedrock Agent Runtime
+    Default: "NONE"
+  VpceS3:
+    Type: String
+    Description: VPC Endpoint URL for S3
+    Default: "NONE"
+
+Conditions:
+  IsPrivateEndpoint: !Equals [!Ref APIGatewayEndpointType, "PRIVATE"]
+  HasExecuteApiVpce: !Not [!Equals [!Ref ExecuteApiVpceId, ""]]
+  IsPrivateWithVpce: !And
+    - !Condition IsPrivateEndpoint
+    - !Condition HasExecuteApiVpce
+  IsPrivateWithoutVpce: !And
+    - !Condition IsPrivateEndpoint
+    - !Not [!Condition HasExecuteApiVpce]
+
+Resources:
+  # ============================================================
+  # SSM Parameters - Bedrock Configuration (16)
+  # ============================================================
+  SSMBedrockAgentId:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/agentId
+      Type: String
+      Value: !Ref BedrockAgentId
+
+  SSMBedrockAgentAliasId:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/agentAliasId
+      Type: String
+      Value: !Ref BedrockAgentAliasId
+
+  SSMBedrockAgentName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/agentName
+      Type: String
+      Value: !Ref BedrockAgentName
+
+  SSMBedrockAgentResourceRoleArn:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/agentResourceRoleArn
+      Type: String
+      Value: !Ref BedrockAgentResourceRoleArn
+
+  SSMBedrockKnowledgeBaseId:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/knowledgeBaseId
+      Type: String
+      Value: !Ref BedrockKnowledgeBaseId
+
+  SSMBedrockDataSourceId:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/dataSourceId
+      Type: String
+      Value: !Ref BedrockDataSourceId
+
+  SSMBedrockKnowledgeBaseS3Bucket:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/knowledgeBaseS3Bucket
+      Type: String
+      Value: !Ref BedrockKnowledgeBaseS3Bucket
+
+  SSMBedrockPersonaS3Bucket:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/personaS3Bucket
+      Type: String
+      Value: !Ref BedrockPersonaS3Bucket
+
+  SSMBedrockDefaultChatType:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/defaultChatType
+      Type: String
+      Value: !Ref BedrockDefaultChatType
+
+  SSMBedrockDefaultModelId:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/defaultModelId
+      Type: String
+      Value: !Ref BedrockDefaultModelId
+
+  SSMBedrockDefaultModelProvider:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/defaultModelProvider
+      Type: String
+      Value: !Ref BedrockDefaultModelProvider
+
+  SSMBedrockDefaultModelName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/defaultModelName
+      Type: String
+      Value: !Ref BedrockDefaultModelName
+
+  SSMBedrockMaxTokens:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/maxTokens
+      Type: String
+      Value: !Ref BedrockMaxTokens
+
+  SSMBedrockDefaultModelStream:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/defaultModelStream
+      Type: String
+      Value: !Ref BedrockDefaultModelStream
+
+  SSMBedrockGuardrailId:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/guardrailId
+      Type: String
+      Value: !Ref BedrockGuardrailId
+
+  SSMBedrockGuardrailVersion:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/guardrailVersion
+      Type: String
+      Value: !Ref BedrockGuardrailVersion
+
+  # ============================================================
+  # SSM Parameters - DynamoDB Configuration (2)
+  # ============================================================
+  SSMDynamoConvHistoryTable:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/dynamo/convHistoryTable
+      Type: String
+      Value: !Ref ConvHistoryTable
+
+  SSMDynamoPersonaTable:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/dynamo/personaTable
+      Type: String
+      Value: !Ref PersonaTable
+
+  # ============================================================
+  # SSM Parameters - VPCE Configuration (6)
+  # ============================================================
+  SSMVpceDynamodb:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/vpce/dynamodb
+      Type: String
+      Value: !Ref VpceDynamodb
+
+  SSMVpceBedrock:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/vpce/bedrock
+      Type: String
+      Value: !Ref VpceBedrock
+
+  SSMVpceBedrockRuntime:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/vpce/bedrockRuntime
+      Type: String
+      Value: !Ref VpceBedrockRuntime
+
+  SSMVpceBedrockAgent:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/vpce/bedrockAgent
+      Type: String
+      Value: !Ref VpceBedrockAgent
+
+  SSMVpceBedrockAgentRuntime:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/vpce/bedrockAgentRuntime
+      Type: String
+      Value: !Ref VpceBedrockAgentRuntime
+
+  SSMVpceS3:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/vpce/s3
+      Type: String
+      Value: !Ref VpceS3
+
+  # ============================================================
+  # IAM Roles and Managed Policies
+  # ============================================================
+
+  # Lambda execution role - uses only managed policies (no inline)
+  ConfigLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ConfigLambdaRole"
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - !Ref ConfigLambdaSSMPolicy
+        - !Ref ConfigLambdaKMSPolicy
+        - !Ref ConfigLambdaDLQPolicy
+
+  # SSM read policy - scoped to stack-name prefix only
+  ConfigLambdaSSMPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-ConfigLambdaSSMPolicy"
+      Path: /
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParametersByPath
+            Resource:
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}"
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/*"
+
+  # KMS decrypt policy - scoped to Lambda KMS key only
+  ConfigLambdaKMSPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-ConfigLambdaKMSPolicy"
+      Path: /
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource:
+              - !Ref LambdaKMSKeyArn
+
+  # DLQ send policy - scoped to specific DLQ ARN
+  ConfigLambdaDLQPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-ConfigLambdaDLQPolicy"
+      Path: /
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource:
+              - !Ref LambdaDLQArn
+
+  # API Gateway CloudWatch logging role - uses only managed policy (no inline)
+  ConfigApiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ConfigApiGatewayRole"
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref ConfigApiGatewayLoggingPolicy
+
+  # CloudWatch Logs policy for API Gateway - minimum permissions for logging
+  ConfigApiGatewayLoggingPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-ConfigApiGatewayLoggingPolicy"
+      Path: /
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+              - logs:PutLogEvents
+              - logs:GetLogGroupFields
+              - logs:FilterLogEvents
+            Resource:
+              - !Sub "arn:${AWS::Partition}:logs:*:*:*"
+
+  # ============================================================
+  # Config Lambda Function
+  # ============================================================
+  ConfigLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-ConfigLambda"
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt ConfigLambdaRole.Arn
+      ReservedConcurrentExecutions: 1
+      Timeout: 30
+      KmsKeyArn: !Ref LambdaKMSKeyArn
+      DeadLetterConfig:
+        TargetArn: !Ref LambdaDLQArn
+      Environment:
+        Variables:
+          SSM_PREFIX: !Sub "/${AWS::StackName}"
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+
+          SENTINEL = "NONE"
+
+          def _val(params, key):
+              """Get param value, converting sentinel 'NONE' to empty string."""
+              v = params.get(key, "")
+              return "" if v == SENTINEL else v
+
+          def lambda_handler(event, context):
+              cors_headers = {
+                  "Content-Type": "application/json",
+                  "Access-Control-Allow-Origin": "*",
+                  "Access-Control-Allow-Headers": "Content-Type,Authorization",
+                  "Access-Control-Allow-Methods": "GET,OPTIONS"
+              }
+              try:
+                  ssm = boto3.client("ssm")
+                  prefix = os.environ["SSM_PREFIX"]
+                  region = os.environ["AWS_REGION"]
+
+                  params = {}
+                  paginator = ssm.get_paginator("get_parameters_by_path")
+                  for page in paginator.paginate(Path=prefix, Recursive=True):
+                      for p in page["Parameters"]:
+                          relative_key = p["Name"][len(prefix) + 1:]
+                          params[relative_key] = p["Value"]
+
+                  response_body = {
+                      "bedrockConfig": {
+                          "region": region,
+                          "agentId": _val(params, "bedrock/agentId"),
+                          "agentAliasId": _val(params, "bedrock/agentAliasId"),
+                          "agentName": _val(params, "bedrock/agentName"),
+                          "agentResourceRoleArn": _val(params, "bedrock/agentResourceRoleArn"),
+                          "knowledgeBaseId": _val(params, "bedrock/knowledgeBaseId"),
+                          "dataSourceId": _val(params, "bedrock/dataSourceId"),
+                          "knowledgeBaseS3Bucket": _val(params, "bedrock/knowledgeBaseS3Bucket"),
+                          "personaS3Bucket": _val(params, "bedrock/personaS3Bucket"),
+                          "defaultChatType": _val(params, "bedrock/defaultChatType"),
+                          "defaultModelId": _val(params, "bedrock/defaultModelId"),
+                          "defaultModelProvider": _val(params, "bedrock/defaultModelProvider"),
+                          "defaultModelName": _val(params, "bedrock/defaultModelName"),
+                          "maxTokens": _val(params, "bedrock/maxTokens"),
+                          "defaultModelStream": _val(params, "bedrock/defaultModelStream"),
+                          "guardrailId": _val(params, "bedrock/guardrailId"),
+                          "guardrailVersion": _val(params, "bedrock/guardrailVersion")
+                      },
+                      "dynamoConfig": {
+                          "region": region,
+                          "convHistoryTable": _val(params, "dynamo/convHistoryTable"),
+                          "personaTable": _val(params, "dynamo/personaTable")
+                      },
+                      "vpceEndpoints": {
+                          "dynamodb": _val(params, "vpce/dynamodb"),
+                          "bedrock": _val(params, "vpce/bedrock"),
+                          "bedrockRuntime": _val(params, "vpce/bedrockRuntime"),
+                          "bedrockAgent": _val(params, "vpce/bedrockAgent"),
+                          "bedrockAgentRuntime": _val(params, "vpce/bedrockAgentRuntime"),
+                          "s3": _val(params, "vpce/s3")
+                      }
+                  }
+
+                  return {
+                      "statusCode": 200,
+                      "headers": cors_headers,
+                      "body": json.dumps(response_body)
+                  }
+              except Exception as e:
+                  print(f"Error retrieving configuration: {e}")
+                  import traceback
+                  traceback.print_exc()
+                  return {
+                      "statusCode": 500,
+                      "headers": cors_headers,
+                      "body": json.dumps({"error": f"Failed to retrieve configuration: {str(e)}"})
+                  }
+
+  # Lambda permission for API Gateway invocation
+  ConfigLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ConfigLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${ConfigApiGateway}/*"
+
+  # ============================================================
+  # CloudWatch Log Group for API Gateway Access Logs
+  # ============================================================
+  ConfigApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/${AWS::StackName}"
+      RetentionInDays: 90
+      KmsKeyId: !Ref CloudWatchLogsKMSKeyArn
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+  # ============================================================
+  # API Gateway REST API
+  # ============================================================
+  ConfigApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${AWS::StackName}-ConfigApi"
+      ApiKeySourceType: HEADER
+      EndpointConfiguration:
+        Types:
+          - !Ref APIGatewayEndpointType
+        VpcEndpointIds: !If
+          - IsPrivateWithVpce
+          - - !Ref ExecuteApiVpceId
+          - !Ref AWS::NoValue
+      Policy: !If
+        - IsPrivateWithVpce
+        # Scenario 1: PRIVATE with VPCE - strict VPCE-only access
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: "Allow"
+              Principal: "*"
+              Action: "execute-api:Invoke"
+              Resource: "execute-api:/*"
+              Condition:
+                StringEquals:
+                  aws:sourceVpce: !Ref ExecuteApiVpceId
+        # Check if PRIVATE without VPCE
+        - !If
+            - IsPrivateWithoutVpce
+            # Scenario 2: PRIVATE without VPCE - allow from VPC
+            - Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Principal: "*"
+                  Action: "execute-api:Invoke"
+                  Resource: "execute-api:/*"
+                  Condition:
+                    StringEquals:
+                      aws:sourceVpc: !Ref VpcId
+            # Scenario 3: Not PRIVATE - no policy
+            - !Ref AWS::NoValue
+
+  # ============================================================
+  # Cognito Authorizer
+  # ============================================================
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: !Sub "${AWS::StackName}-CognitoAuthorizer"
+      RestApiId: !Ref ConfigApiGateway
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - !Sub "arn:${AWS::Partition}:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${CognitoUserPoolId}"
+
+  # ============================================================
+  # /config Resource and Methods
+  # ============================================================
+  ConfigResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      ParentId: !GetAtt ConfigApiGateway.RootResourceId
+      PathPart: config
+
+  # GET /config - Cognito authorized, AWS_PROXY to Lambda
+  ConfigGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      ResourceId: !Ref ConfigResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      ApiKeyRequired: false
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConfigLambda.Arn}/invocations"
+        TimeoutInMillis: 29000
+
+  # OPTIONS /config - CORS preflight, no auth
+  ConfigOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      ResourceId: !Ref ConfigResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        PassthroughBehavior: WHEN_NO_MATCH
+        TimeoutInMillis: 29000
+
+  # ============================================================
+  # Gateway Responses - CORS headers on error responses
+  # ============================================================
+  GatewayResponseDefault4XX:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      ResponseType: DEFAULT_4XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  GatewayResponseDefault5XX:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      ResponseType: DEFAULT_5XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  # ============================================================
+  # API Gateway Deployment and Stage
+  # ============================================================
+  ConfigApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ConfigGetMethod
+      - ConfigOptionsMethod
+      - GatewayResponseDefault4XX
+      - GatewayResponseDefault5XX
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      Description: "Deployment for Config API"
+
+  ConfigApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      StageName: v1
+      DeploymentId: !Ref ConfigApiDeployment
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+      AccessLogSetting:
+        DestinationArn: !GetAtt ConfigApiLogGroup.Arn
+        Format: '$context.requestId $context.extendedRequestId $context.identity.sourceIp $context.requestTime $context.routeKey $context.status'
+
+  # ============================================================
+  # WAF WebACL for Config API Gateway
+  # ============================================================
+  ConfigWAF:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${AWS::StackName}-config-api-waf"
+      Scope: REGIONAL
+      Description: "WAF Web ACL for Config API Gateway with rate limiting and managed rules"
+      DefaultAction:
+        Allow: {}
+      Rules:
+        # Rate limiting rule - 2000 requests per 5 minutes per IP
+        - Name: RateLimitRule
+          Priority: 1
+          Statement:
+            RateBasedStatement:
+              Limit: 2000
+              AggregateKeyType: IP
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${AWS::StackName}-config-api-RateLimitRule"
+
+        # AWS Managed Rules - Core Rule Set
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${AWS::StackName}-config-api-AWSManagedRulesCommonRuleSet"
+
+        # AWS Managed Rules - Known Bad Inputs
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${AWS::StackName}-config-api-AWSManagedRulesKnownBadInputsRuleSet"
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${AWS::StackName}-config-api-waf"
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-config-api-waf"
+        - Key: Purpose
+          Value: "Config API Gateway WAF protection"
+
+  # WAF WebACL Association - links WAF to API Gateway stage
+  ConfigWAFAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/${ConfigApiGateway}/stages/${ConfigApiStage}"
+      WebACLArn: !GetAtt ConfigWAF.Arn
+
+# ============================================================
+# Stack Outputs
+# ============================================================
+Outputs:
+  ConfigApiEndpoint:
+    Description: "Config API endpoint URL"
+    Value: !Sub "https://${ConfigApiGateway}.execute-api.${AWS::Region}.amazonaws.com/v1/config"
+    Export:
+      Name: !Sub "${AWS::StackName}-ConfigApiEndpoint"

@@ -1,0 +1,335 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: "API Gateway Stack for GovCloud - REST API for React application delivery"
+
+Parameters:
+  # Foundation Stack Outputs
+  S3KMSKeyArn:
+    Type: String
+    Description: KMS key ARN for S3 encryption from Foundation stack (for IAM policies)
+  CloudWatchLogsKMSKeyArn:
+    Type: String
+    Description: KMS key ARN for CloudWatch Logs encryption from Foundation stack
+  
+  # CICD Stack Outputs
+  UICodeS3Bucket:
+    Type: String
+    Description: S3 bucket hosting React application from CICD stack
+  
+  # User-provided Parameters
+  APIGatewayName:
+    Type: String
+    Description: Name for the API Gateway REST API
+  APIGatewayEndpointType:
+    Type: String
+    Description: Endpoint type for the API Gateway (PRIVATE or REGIONAL)
+    Default: REGIONAL
+  VpcId:
+    Type: String
+    Description: VPC ID for PRIVATE endpoint type (required for PRIVATE endpoints)
+    Default: ""
+  ExecuteApiVpceId:
+    Type: String
+    Description: VPC Endpoint ID for execute-api (required for PRIVATE endpoints to associate the VPCE)
+    Default: ""
+
+Conditions:
+  IsPrivateEndpoint: !Equals [!Ref APIGatewayEndpointType, "PRIVATE"]
+  HasExecuteApiVpce: !Not [!Equals [!Ref ExecuteApiVpceId, ""]]
+  IsPrivateWithVpce: !And
+    - !Condition IsPrivateEndpoint
+    - !Condition HasExecuteApiVpce
+  IsPrivateWithoutVpce: !And
+    - !Condition IsPrivateEndpoint
+    - !Not [!Condition HasExecuteApiVpce]
+
+Resources:
+
+  # CloudWatch Log Group for API Gateway access logs
+  APIGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/${AWS::StackName}"
+      RetentionInDays: 90
+      KmsKeyId: !Ref CloudWatchLogsKMSKeyArn
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+  APIGatewayS3AccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-APIGatewayS3Access"
+      Path: /
+      PolicyDocument: 
+        Version: '2012-10-17'
+        Statement:
+          - Sid: GetObjectInBucket
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${UICodeS3Bucket}/*
+          - Sid: KMSDecryptAccess
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource:
+              - !Ref S3KMSKeyArn
+  IAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/"
+      RoleName: !Sub "${AWS::StackName}-APIGatewayS3ProxyPolicy"
+      AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"apigateway.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+      MaxSessionDuration: 3600
+      ManagedPolicyArns: 
+      - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+      - !Ref APIGatewayS3AccessPolicy
+
+  ApiGatewayRestApi:
+    Type: "AWS::ApiGateway::RestApi"
+    Properties:
+      Name: !Sub ${APIGatewayName}
+      ApiKeySourceType: "HEADER"
+      BinaryMediaTypes:
+      - "*/*"
+      EndpointConfiguration:
+        Types:
+        - !Ref APIGatewayEndpointType
+        VpcEndpointIds: !If
+          - IsPrivateWithVpce
+          - - !Ref ExecuteApiVpceId
+          - !Ref AWS::NoValue
+      Policy: !If
+        - IsPrivateWithVpce
+        # Scenario 1: PRIVATE with VPCE - strict VPCE-only access
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: "Allow"
+              Principal: "*"
+              Action: "execute-api:Invoke"
+              Resource: "execute-api:/*"
+              Condition:
+                StringEquals:
+                  aws:sourceVpce: !Ref ExecuteApiVpceId
+        # Check if PRIVATE without VPCE
+        - !If
+            - IsPrivateWithoutVpce
+            # Scenario 2: PRIVATE without VPCE - allow from VPC
+            - Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Principal: "*"
+                  Action: "execute-api:Invoke"
+                  Resource: "execute-api:/*"
+                  Condition:
+                    StringEquals:
+                      aws:sourceVpc: !Ref VpcId
+            # Scenario 3: Not PRIVATE - no policy
+            - !Ref AWS::NoValue
+
+  ChatbotResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      PathPart: "chatbot"
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+
+  ApiGatewayResource:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      PathPart: "{folder}"
+      ParentId: !Ref ChatbotResource
+
+  ApiGatewayResource2:
+    Type: "AWS::ApiGateway::Resource"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      PathPart: "{item+}"
+      ParentId: !Ref ApiGatewayResource
+
+  ApiGatewayMethod:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGatewayResource2
+      HttpMethod: "GET"
+      # AuthorizationType is intentionally set to NONE for use in GovCloud as a CloudFront alternative
+      AuthorizationType: "NONE"
+      ApiKeyRequired: false
+      RequestParameters: 
+        "method.request.path.folder": true
+        "method.request.path.item": true
+      MethodResponses: 
+      - 
+        ResponseModels: 
+          "application/json": !Ref ApiGatewayModel
+        ResponseParameters: 
+          "method.response.header.Access-Control-Allow-Origin": false
+          "method.response.header.Content-Type": false
+          "method.response.header.content-type": false
+        StatusCode: "200"
+      - 
+        StatusCode: "400"
+      - 
+        StatusCode: "500"
+      Integration: 
+        Credentials: !GetAtt IAMRole.Arn
+        IntegrationHttpMethod: "GET"
+        IntegrationResponses: 
+        - 
+          ResponseParameters: 
+            "method.response.header.Access-Control-Allow-Origin": "'*'"
+            "method.response.header.Content-Type": "integration.response.header.Content-Type"
+            "method.response.header.content-type": "integration.response.header.content-type"
+          StatusCode: "200"
+        - 
+          SelectionPattern: "4\\d{2}"
+          StatusCode: "400"
+        - 
+          SelectionPattern: "5\\d{2}"
+          StatusCode: "500"
+        PassthroughBehavior: "WHEN_NO_MATCH"
+        RequestParameters: 
+          "integration.request.path.bucket": "method.request.path.folder"
+          "integration.request.path.object": "method.request.path.item"
+        TimeoutInMillis: 29000
+        Type: "AWS"
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:s3:path/{bucket}/{object}"
+
+  ApiGatewayMethod2:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGatewayResource2
+      HttpMethod: "OPTIONS"
+      # AuthorizationType is intentionally set to NONE for use in GovCloud as a CloudFront alternative
+      AuthorizationType: "NONE"
+      ApiKeyRequired: false
+      RequestParameters: 
+        "method.request.path.folder": true
+        "method.request.path.item": true
+      MethodResponses: 
+      - 
+        ResponseModels: 
+          "application/json": !Ref ApiGatewayModel
+        ResponseParameters: 
+          "method.response.header.Access-Control-Allow-Headers": false
+          "method.response.header.Access-Control-Allow-Methods": false
+          "method.response.header.Access-Control-Allow-Origin": false
+        StatusCode: "200"
+      Integration:
+        IntegrationResponses: 
+        - 
+          ResponseParameters: 
+            "method.response.header.Access-Control-Allow-Headers": "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+            "method.response.header.Access-Control-Allow-Methods": "'GET,OPTIONS'"
+            "method.response.header.Access-Control-Allow-Origin": "'*'"
+          StatusCode: "200"
+        PassthroughBehavior: "WHEN_NO_MATCH"
+        RequestTemplates: 
+          "application/json": "{\"statusCode\": 200}"
+        TimeoutInMillis: 29000
+        Type: "MOCK"
+
+  ApiGatewayModel:
+    Type: "AWS::ApiGateway::Model"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      Schema: |
+          {
+            "title" : "Empty Schema",
+            "type" : "object"
+          }
+      ContentType: "application/json"
+
+  ApiGatewayStage:
+    Type: "AWS::ApiGateway::Stage"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: "v1"    # You can change this to your desired stage name
+      DeploymentId: !Ref ApiGatewayDeployment
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+      AccessLogSetting:
+        DestinationArn: !GetAtt APIGatewayLogGroup.Arn
+        Format: '$context.requestId $context.extendedRequestId $context.identity.sourceIp $context.requestTime $context.routeKey $context.status'
+
+  ApiGatewayDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    DependsOn:
+      - ApiGatewayMethod
+      - ApiGatewayMethod2
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      Description: "Deployment for chatbot API"
+
+  ApiGatewayWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub ${APIGatewayName}-WAF
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      Rules:
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CommonRuleSetMetric
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: KnownBadInputsRuleSetMetric
+        - Name: RateLimitRule
+          Priority: 3
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 2000
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRuleMetric
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub ${APIGatewayName}-WAF
+
+  ApiGatewayWebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    DependsOn: ApiGatewayStage
+    Properties:
+      ResourceArn: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/restapis/${ApiGatewayRestApi}/stages/v1"
+      WebACLArn: !GetAtt ApiGatewayWebACL.Arn
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/v1/chatbot"
+  UserURL:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/v1/chatbot/${UICodeS3Bucket}/index.html"
