@@ -206,4 +206,4 @@ Alternatively, `deploy.sh --rollback` performs the same teardown.
 
 ## 📄 License
 
-This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE.md) file.
+This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
