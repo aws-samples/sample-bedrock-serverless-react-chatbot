@@ -79,7 +79,7 @@ sample-bedrock-serverless-react-chatbot/
 
 1. Clone the repository and navigate to the Infrastructure directory.
 ```bash
-git clone <repository-url>
+git clone https://github.com/aws-samples/sample-bedrock-serverless-react-chatbot.git
 cd sample-bedrock-serverless-react-chatbot/Infrastructure
 ```
 
