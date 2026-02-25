@@ -1,6 +1,8 @@
 # sample-bedrock-serverless-react-chatbot
 
-Solution: Amazon Bedrock powered serverless chatbot that's deployed through Infrastructure as Code and creates a powerful, scalable, and user-friendly chatbot solution that can be deployed quickly and efficiently, in both commercial and GovCloud. The solution includes robust conversation history functionality, allowing users to reference and continue previous interactions seamlessly. We've incorporated Personas and RAG for context-aware conversations, which means the chatbot can maintain relevant, intelligent dialogue based on specific roles and knowledge bases. Additionally, the system provides cost estimates based on token usage per conversation, giving you full transparency into operational expenses. Finally, we support file uploads for document summarization and analysis, enabling users to extract insights from their documents directly through the chat interface.
+Amazon Bedrock powered serverless chatbot that's deployed through Infrastructure as Code and creates a powerful, scalable, and user-friendly chatbot solution that can be deployed quickly and efficiently, in both commercial and GovCloud. The solution includes robust conversation history functionality, allowing users to reference and continue previous interactions seamlessly. We've incorporated Personas and RAG for context-aware conversations, which means the chatbot can maintain relevant, intelligent dialogue based on specific roles and knowledge bases. Additionally, the system provides token usage estimates per conversation, giving you estimates into consumption metrics. Finally, we support file uploads for document summarization and analysis, enabling users to extract insights from their documents directly through the chat interface.
+
+**Note: This solution is designed for Proof of Concept (POC) usage and is not intended for production deployment.**
 
 ## Table of Contents
 
