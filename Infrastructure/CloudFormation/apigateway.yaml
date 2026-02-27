@@ -22,6 +22,10 @@ Parameters:
   APIGatewayName:
     Type: String
     Description: Name for the API Gateway REST API
+  APIGatewayLogGroupName:
+    Type: String
+    Description: Name for the CloudWatch Log Group (use existing or create new)
+    Default: ""
   APIGatewayEndpointType:
     Type: String
     Description: Endpoint type for the API Gateway (PRIVATE or REGIONAL)
@@ -48,14 +52,16 @@ Conditions:
 Resources:
 
   # CloudWatch Log Group for API Gateway access logs
+  # Note: If log group already exists, CloudFormation will fail. 
+  # The log group has DeletionPolicy: Retain to preserve logs when stack is deleted.
   APIGatewayLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       LogGroupName: !Sub "/aws/apigateway/${AWS::StackName}"
       RetentionInDays: 90
       KmsKeyId: !Ref CloudWatchLogsKMSKeyArn
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
 
   APIGatewayS3AccessPolicy:
     Type: AWS::IAM::ManagedPolicy
