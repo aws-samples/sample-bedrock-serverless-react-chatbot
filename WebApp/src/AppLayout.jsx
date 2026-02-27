@@ -35,7 +35,6 @@ import AgentInstructions from './AgentInstructions';
 import { bedrockConfig, config } from './aws-config';
 import { convHistory } from './ConvHistory';
 import pricingData from './bedrock_pricing.json';
-import { KbRefreshProvider } from './KbRefreshContext';
 
 applyMode(Mode.Dark);
 
@@ -355,10 +354,9 @@ function Layout() {
   };
 
   return (
-    <KbRefreshProvider>
-      <div className="layout-wrapper">
-        <div className="sticky-top-nav">
-        <TopNavigation
+    <div className="layout-wrapper">
+      <div className="sticky-top-nav">
+      <TopNavigation
         identity={{
           href: "#",
           title: "Amazon Bedrock Chatbot powered by AWS",
@@ -655,7 +653,6 @@ function Layout() {
         />
       </I18nProvider>
     </div>
-    </KbRefreshProvider>
   );
 }
 

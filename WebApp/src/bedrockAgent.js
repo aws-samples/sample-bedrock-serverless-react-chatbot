@@ -4,8 +4,7 @@ import {
   BedrockAgentRuntimeClient,
   InvokeAgentCommand,
   InvokeInlineAgentCommand,
-  RetrieveAndGenerateStreamCommand,
-  RetrieveCommand
+  RetrieveAndGenerateStreamCommand
 } from "@aws-sdk/client-bedrock-agent-runtime";
 import { 
   BedrockAgentClient,
@@ -17,9 +16,7 @@ import {
   PrepareAgentCommand,
   CreateAgentAliasCommand,
   UpdateDataSourceCommand,
-  CreateDataSourceCommand,
-  GetDataSourceCommand,
-  ListIngestionJobsCommand
+  CreateDataSourceCommand
 } from "@aws-sdk/client-bedrock-agent";
 import { BedrockClient, GetFoundationModelCommand, ListFoundationModelsCommand, ListInferenceProfilesCommand } from "@aws-sdk/client-bedrock";
 import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
@@ -810,87 +807,6 @@ export const getSyncStatus = async (ingestionJobId, credentials) => {
     return response.ingestionJob.status;
   } catch(e) {
     console.error('Get sync status error:', sanitizeForLog(e.message));
-  }
-};
-
-export const getDataSourceStats = async (credentials) => {
-  const bedrockAgentClient = new BedrockAgentClient({
-    region: bedrockConfig.region,
-    credentials: credentials,
-    ...(vpceEndpoints.bedrockAgent && { endpoint: vpceEndpoints.bedrockAgent })
-  });
-  
-  const bedrockAgentRuntimeClient = new BedrockAgentRuntimeClient({
-    region: bedrockConfig.region,
-    credentials: credentials,
-    ...(vpceEndpoints.bedrockAgentRuntime && { endpoint: vpceEndpoints.bedrockAgentRuntime })
-  });
-  
-  const knowledgeBaseId = bedrockConfig.knowledgeBaseId;
-  const dataSourceId = bedrockConfig.dataSourceId;
-  
-  if (!knowledgeBaseId || !dataSourceId) {
-    throw new Error('Knowledge Base ID or Data Source ID not configured');
-  }
-  
-  if (config.debug) {
-    console.log('Fetching data source stats for KB:', knowledgeBaseId, 'DS:', dataSourceId);
-  }
-  
-  try {
-    // Get data source info
-    const dataSourceCommand = new GetDataSourceCommand({
-      knowledgeBaseId: knowledgeBaseId,
-      dataSourceId: dataSourceId
-    });
-    const dataSourceResponse = await bedrockAgentClient.send(dataSourceCommand);
-    
-    // Check if KB has any documents by doing a test retrieval
-    let documentCount = 0;
-    try {
-      const retrieveCommand = new RetrieveCommand({
-        knowledgeBaseId: knowledgeBaseId,
-        retrievalQuery: {
-          text: "test" // Simple test query
-        },
-        retrievalConfiguration: {
-          vectorSearchConfiguration: {
-            numberOfResults: 1
-          }
-        }
-      });
-      const retrieveResponse = await bedrockAgentRuntimeClient.send(retrieveCommand);
-      
-      // If we get any results, the KB has documents
-      if (retrieveResponse.retrievalResults && retrieveResponse.retrievalResults.length > 0) {
-        documentCount = 1; // We know there's at least 1 document
-        if (config.debug) {
-          console.log('KB has documents (retrieve returned results)');
-        }
-      } else {
-        if (config.debug) {
-          console.log('KB is empty (retrieve returned no results)');
-        }
-      }
-    } catch (retrieveError) {
-      // If retrieve fails, fall back to assuming empty
-      console.warn('Could not retrieve from KB, assuming empty:', sanitizeForLog(retrieveError.message));
-      documentCount = 0;
-    }
-    
-    if (config.debug) {
-      console.log('Document count (has docs):', documentCount > 0 ? 'Yes' : 'No');
-    }
-    
-    return {
-      status: dataSourceResponse.dataSource.status,
-      name: dataSourceResponse.dataSource.name,
-      description: dataSourceResponse.dataSource.description,
-      documentCount: documentCount
-    };
-  } catch(e) {
-    console.error('Get data source stats error:', sanitizeForLog(e.message));
-    throw e;
   }
 };
 
