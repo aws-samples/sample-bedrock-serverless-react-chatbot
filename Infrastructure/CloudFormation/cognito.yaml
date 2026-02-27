@@ -216,6 +216,8 @@ Resources:
               - bedrock:ListIngestionJobs
               - bedrock:RetrieveAndGenerate
               - bedrock:UpdateDataSource
+              - bedrock:GetDataSource
+              - bedrock:ListIngestionJobs
             Resource:
               - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KnowledgeBaseId}'
           - Sid: BedrockDataSourceOperations
@@ -223,6 +225,7 @@ Resources:
             Action:
               - bedrock:CreateDataSource
               - bedrock:UpdateDataSource
+              - bedrock:GetDataSource
             Resource:
               - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KnowledgeBaseId}/data-source/*'
           - Sid: BedrockListOperations

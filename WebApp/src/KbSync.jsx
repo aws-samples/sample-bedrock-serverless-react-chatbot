@@ -7,12 +7,14 @@ import FormField from "@cloudscape-design/components/form-field";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import { syncKnowledgeBase, getSyncStatus } from './bedrockAgent';
 import { CredentialsContext } from './SessionContext';
+import { useKbRefresh } from './KbRefreshContext';
 
 export default function KnowledgeBaseSync() {
   const [jobId, setJobId] = useState(null);
   const credentials = useContext(CredentialsContext);
   const [indicator, setIndicator] = useState(null);
   const [loading, setLoading] = useState(false);
+  const { triggerRefresh } = useKbRefresh();
 
   // Sleep helper function
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,6 +26,8 @@ export default function KnowledgeBaseSync() {
         setIndicator(<StatusIndicator type="in-progress">In progress</StatusIndicator>);
       } else if (status === "COMPLETE") {
         setIndicator(<StatusIndicator type="success">Success</StatusIndicator>);
+        // Trigger banner refresh after successful sync
+        triggerRefresh();
         break;
       } else if (status === "FAILED") {
         setIndicator(<StatusIndicator type="error">Error</StatusIndicator>);

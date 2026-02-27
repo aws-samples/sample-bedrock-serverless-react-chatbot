@@ -52,6 +52,7 @@ import PersonaSelector from './PersonaSelector';
 import { PersonaService } from './PersonaService';
 import { sanitizeForLog } from './utils/sanitize';
 import DocumentViewer, { isViewableFile } from './DocumentViewer';
+import KbStatusBanner from './KbStatusBanner';
 
 // Styles
 import '@cloudscape-design/global-styles/index.css';
@@ -1460,6 +1461,11 @@ const ChatUI = React.forwardRef(({
             >
               Chat UI
             </Header>
+            {chatType === 'RAG' && (
+              <Box padding={{ top: 's', horizontal: 's' }}>
+                <KbStatusBanner />
+              </Box>
+            )}
             <div className="chat-ui-scroll-container" ref={chatContainerRef}>
               <div className="chat-container">
                 <div className="chat-messages-wrapper">

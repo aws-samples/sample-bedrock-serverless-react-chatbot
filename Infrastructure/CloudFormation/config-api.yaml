@@ -38,7 +38,7 @@ Parameters:
     Description: VPC Endpoint ID for execute-api (required for PRIVATE endpoints to associate the VPCE)
     Default: ""
 
-  # Bedrock Parameters (16)
+  # Bedrock Parameters (17)
   BedrockAgentId:
     Type: String
     Description: Bedrock Agent ID
@@ -94,6 +94,10 @@ Parameters:
     Type: String
     Description: Optional Bedrock Guardrail version
     Default: "NONE"
+  BedrockDefaultPrompt:
+    Type: String
+    Description: Default prompt template for knowledge base retrieval
+    Default: "You are a helpful assistant. Use the following context from the knowledge base to answer the question.\n\n$search_results$\n\nQuestion: $query$\n\nInstructions:\n- Answer the question based on the context provided above\n- If the information needed to answer the question is not found in the context, respond with: \"Sorry, I don't have information in my knowledge base to answer that question.\"\n- Be concise and accurate in your responses\n\nAnswer:"
 
   # DynamoDB Parameters (2)
   ConvHistoryTable:
@@ -141,7 +145,7 @@ Conditions:
 
 Resources:
   # ============================================================
-  # SSM Parameters - Bedrock Configuration (16)
+  # SSM Parameters - Bedrock Configuration (17)
   # ============================================================
   SSMBedrockAgentId:
     Type: AWS::SSM::Parameter
@@ -254,6 +258,13 @@ Resources:
       Name: !Sub /${AWS::StackName}/bedrock/guardrailVersion
       Type: String
       Value: !Ref BedrockGuardrailVersion
+
+  SSMBedrockDefaultPrompt:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/defaultPrompt
+      Type: String
+      Value: !Ref BedrockDefaultPrompt
 
   # ============================================================
   # SSM Parameters - DynamoDB Configuration (2)
@@ -491,7 +502,8 @@ Resources:
                           "maxTokens": _val(params, "bedrock/maxTokens"),
                           "defaultModelStream": _val(params, "bedrock/defaultModelStream"),
                           "guardrailId": _val(params, "bedrock/guardrailId"),
-                          "guardrailVersion": _val(params, "bedrock/guardrailVersion")
+                          "guardrailVersion": _val(params, "bedrock/guardrailVersion"),
+                          "defaultPrompt": _val(params, "bedrock/defaultPrompt")
                       },
                       "dynamoConfig": {
                           "region": region,
