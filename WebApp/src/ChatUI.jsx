@@ -1054,9 +1054,13 @@ const ChatUI = React.forwardRef(({
   
         setRagSessionId(result.sessionId);
         citations = result.citations || [];
+        
+        console.log('RAG result citations:', citations);
+        console.log('Citations length:', citations.length);
 
         // Attach citations to the assistant message
         if (citations.length > 0) {
+          console.log('Attaching citations to message');
           setCurrentSessionMessages(prevMessages => {
             const lastMessage = prevMessages[prevMessages.length - 1];
             if (lastMessage && lastMessage.role === 'assistant') {

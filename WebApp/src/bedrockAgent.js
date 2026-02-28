@@ -314,6 +314,7 @@ Answer:`;
         }
       }
       if (event.citation) {
+        console.log('CITATION EVENT FOUND:', event.citation);
         // CitationEvent has retrievedReferences at both event.citation.citation
         // and event.citation level. Normalize into a consistent shape.
         const citationEvent = event.citation;
@@ -322,7 +323,13 @@ Answer:`;
           generatedResponsePart: innerCitation?.generatedResponsePart || citationEvent.generatedResponsePart,
           retrievedReferences: innerCitation?.retrievedReferences || citationEvent.retrievedReferences || [],
         });
+        console.log('Citations array now has', citations.length, 'items');
       }
+    }
+
+    console.log('Stream complete. Total citations:', citations.length);
+    if (citations.length > 0) {
+      console.log('First citation:', citations[0]);
     }
 
     if(config.debug) {

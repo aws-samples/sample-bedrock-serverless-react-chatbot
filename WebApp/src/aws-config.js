@@ -56,7 +56,7 @@ export const vpceEndpoints = new Proxy({}, {
 });
 
 export const config = {
-  debug: false
+  debug: true
 }
 
 export default awsConfig;
