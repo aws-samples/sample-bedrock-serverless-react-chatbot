@@ -8,3 +8,4 @@ build/
 Infrastructure/vpc-config.json
 .kiro/
 .vscode/
+.vite/
