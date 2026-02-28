@@ -249,6 +249,7 @@ export const invokeBedrockRetrieveAndGenerateStreamCommand = async (prompt, file
   }
 
   // Default prompt template with instruction to acknowledge when information is not found
+  // IMPORTANT: $output_format_instructions$ is REQUIRED for citations to work
   const defaultPromptTemplate = `You are a helpful assistant. Use the following context from the knowledge base to answer the question.
 
 $search_results$
@@ -258,9 +259,9 @@ Question: $query$
 Instructions:
 - Answer the question based on the context provided above
 - If the information needed to answer the question is not found in the context, respond with: "Sorry, I don't have information in my knowledge base to answer that question."
-- Be concise and accurate in your responses
+- Be accurate and provide as much supporting information as possible in your responses
 
-Answer:`;
+$output_format_instructions$`;
 
   const input = {
     ...(sessionId && { sessionId }),
@@ -292,6 +293,7 @@ Answer:`;
 
   try {
     if (config.debug) {
+      console.log('=== RAG REQUEST START ===');
       console.log('Sending request to Bedrock:', JSON.stringify(input, null, 2));
     }
 
@@ -300,12 +302,17 @@ Answer:`;
     
     let responseText = '';
     let citations = [];
+    let eventCount = 0;
+    let outputEventCount = 0;
+    let citationEventCount = 0;
 
     for await (const event of response.stream) {
+      eventCount++;
       if(config.debug) {
-        console.log('Event:', JSON.stringify(event, null, 2));
+        console.log(`Event #${eventCount}:`, JSON.stringify(event, null, 2));
       }
       if (event.output) {
+        outputEventCount++;
         const chunkText = event.output.text;
         responseText += chunkText;
         
@@ -314,7 +321,10 @@ Answer:`;
         }
       }
       if (event.citation) {
-        console.log('CITATION EVENT FOUND:', event.citation);
+        citationEventCount++;
+        if (config.debug) {
+          console.log(`🔍 CITATION EVENT #${citationEventCount} FOUND:`, JSON.stringify(event.citation, null, 2));
+        }
         // CitationEvent has retrievedReferences at both event.citation.citation
         // and event.citation level. Normalize into a consistent shape.
         const citationEvent = event.citation;
@@ -323,17 +333,24 @@ Answer:`;
           generatedResponsePart: innerCitation?.generatedResponsePart || citationEvent.generatedResponsePart,
           retrievedReferences: innerCitation?.retrievedReferences || citationEvent.retrievedReferences || [],
         });
-        console.log('Citations array now has', citations.length, 'items');
+        if (config.debug) {
+          console.log(`✅ Citations array now has ${citations.length} items`);
+        }
       }
     }
 
-    console.log('Stream complete. Total citations:', citations.length);
-    if (citations.length > 0) {
-      console.log('First citation:', citations[0]);
-    }
-
     if(config.debug) {
-      console.log(response);
+      console.log('=== RAG RESPONSE COMPLETE ===');
+      console.log(`Total events: ${eventCount}`);
+      console.log(`Output events: ${outputEventCount}`);
+      console.log(`Citation events: ${citationEventCount}`);
+      console.log('Response object:', response);
+      console.log('FINAL CITATIONS COUNT:', citations.length);
+      if (citations.length > 0) {
+        console.log('FINAL CITATIONS:', JSON.stringify(citations, null, 2));
+      } else {
+        console.log('⚠️ NO CITATIONS WERE FOUND IN THE STREAM');
+      }
     }
 
     // Add the response to the conversation history

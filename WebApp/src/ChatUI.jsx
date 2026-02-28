@@ -52,6 +52,7 @@ import PersonaSelector from './PersonaSelector';
 import { PersonaService } from './PersonaService';
 import { sanitizeForLog } from './utils/sanitize';
 import DocumentViewer, { isViewableFile } from './DocumentViewer';
+import KbStatusBanner from './KbStatusBanner';
 
 // Styles
 import '@cloudscape-design/global-styles/index.css';
@@ -221,7 +222,19 @@ const CitationBar = ({ citations, credentials, citationChipRefs }) => {
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [viewerState, setViewerState] = useState({ visible: false, fileName: '', fileUrl: null, fileUri: '', citationTexts: [] });
 
-  if (!citations || citations.length === 0) return null;
+  if (config.debug) {
+    console.log('📊 CitationBar component called');
+    console.log('  - Citations prop:', citations);
+    console.log('  - Citations type:', Array.isArray(citations) ? 'array' : typeof citations);
+    console.log('  - Citations length:', citations?.length || 0);
+  }
+
+  if (!citations || citations.length === 0) {
+    if (config.debug) {
+      console.log('⚠️ CitationBar: No citations to display (returning null)');
+    }
+    return null;
+  }
 
   // Deduplicate references across all citation groups
   const allRefs = [];
@@ -242,7 +255,16 @@ const CitationBar = ({ citations, credentials, citationChipRefs }) => {
     });
   });
 
-  if (allRefs.length === 0) return null;
+  if (config.debug) {
+    console.log('CitationBar: Deduplicated references count:', allRefs.length);
+  }
+
+  if (allRefs.length === 0) {
+    if (config.debug) {
+      console.log('CitationBar: No valid references found after deduplication');
+    }
+    return null;
+  }
 
   const getFileName = (uri) => {
     try {
@@ -442,6 +464,15 @@ const ChatMessage = React.memo(({ message, username, userInitials, userEmail, cr
   const messageText = message.content?.[0]?.text;
   const isStreaming = message.isStreaming;
   const citationChipRefs = useRef({});
+
+  if (config.debug && !isUser) {
+    console.log('🎨 ChatMessage rendering assistant message');
+    console.log('  - Message has citations:', !!message.citations);
+    console.log('  - Citations count:', message.citations?.length || 0);
+    if (message.citations && message.citations.length > 0) {
+      console.log('  - Citations data:', JSON.stringify(message.citations, null, 2));
+    }
+  }
 
   // Build deduplicated citation refs list (mirrors CitationBar logic)
   const allRefs = useMemo(() => {
@@ -1054,24 +1085,46 @@ const ChatUI = React.forwardRef(({
   
         setRagSessionId(result.sessionId);
         citations = result.citations || [];
-        
-        console.log('RAG result citations:', citations);
-        console.log('Citations length:', citations.length);
+
+        if (config.debug) {
+          console.log('=== RAG RESULT RECEIVED ===');
+          console.log('Citations received from bedrockAgent:', citations);
+          console.log('Citations array length:', citations.length);
+          console.log('Citations array type:', Array.isArray(citations) ? 'array' : typeof citations);
+          if (citations.length > 0) {
+            console.log('First citation structure:', JSON.stringify(citations[0], null, 2));
+          }
+        }
 
         // Attach citations to the assistant message
         if (citations.length > 0) {
-          console.log('Attaching citations to message');
+          if (config.debug) {
+            console.log('✅ Attaching', citations.length, 'citations to assistant message');
+          }
           setCurrentSessionMessages(prevMessages => {
             const lastMessage = prevMessages[prevMessages.length - 1];
             if (lastMessage && lastMessage.role === 'assistant') {
-              return prevMessages.map((msg, index) => 
+              const updated = prevMessages.map((msg, index) => 
                 index === prevMessages.length - 1
                   ? { ...msg, citations }
                   : msg
               );
+              if (config.debug) {
+                console.log('✅ Updated last message with citations');
+                console.log('Last message now has citations:', updated[updated.length - 1].citations);
+              }
+              return updated;
+            } else {
+              if (config.debug) {
+                console.log('⚠️ Last message is not an assistant message, cannot attach citations');
+              }
             }
             return prevMessages;
           });
+        } else {
+          if (config.debug) {
+            console.log('⚠️ No citations to attach - citations array is empty');
+          }
         }
   
       } else if (chatType === 'LLM') {
@@ -1464,6 +1517,7 @@ const ChatUI = React.forwardRef(({
             >
               Chat UI
             </Header>
+            {chatType === 'RAG' && <KbStatusBanner />}
             <div className="chat-ui-scroll-container" ref={chatContainerRef}>
               <div className="chat-container">
                 <div className="chat-messages-wrapper">

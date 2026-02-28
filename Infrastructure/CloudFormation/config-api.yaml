@@ -96,8 +96,8 @@ Parameters:
     Default: "NONE"
   BedrockDefaultPrompt:
     Type: String
-    Description: Default prompt template for knowledge base retrieval
-    Default: "You are a helpful assistant. Use the following context from the knowledge base to answer the question.\n\n$search_results$\n\nQuestion: $query$\n\nInstructions:\n- Answer the question based on the context provided above\n- If the information needed to answer the question is not found in the context, respond with: \"Sorry, I don't have information in my knowledge base to answer that question.\"\n- Be concise and accurate in your responses\n\nAnswer:"
+    Description: Default prompt template for knowledge base retrieval (MUST include $output_format_instructions$ for citations)
+    Default: "You are a helpful assistant. Use the following context from the knowledge base to answer the question.\n\n$search_results$\n\nQuestion: $query$\n\nInstructions:\n- Answer the question based on the context provided above\n- If the information needed to answer the question is not found in the context, respond with: \"Sorry, I don't have information in my knowledge base to answer that question.\"\n- Be accurate and provide as much supporting information as possible in your responses\n\n$output_format_instructions$"
 
   # DynamoDB Parameters (2)
   ConvHistoryTable:
