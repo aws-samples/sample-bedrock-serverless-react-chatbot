@@ -53,6 +53,7 @@ import { PersonaService } from './PersonaService';
 import { sanitizeForLog } from './utils/sanitize';
 import DocumentViewer, { isViewableFile } from './DocumentViewer';
 import KbStatusBanner from './KbStatusBanner';
+import ExportModal from './ExportModal';
 
 // Styles
 import '@cloudscape-design/global-styles/index.css';
@@ -133,6 +134,7 @@ CodeBlock.displayName = 'CodeBlock';
 const MessageActions = ({ text, timestamp, userEmail, credentials, sessionId }) => {
   const [copiedStates, setCopiedStates] = useState({});
   const [feedbackStates, setFeedbackStates] = useState({});
+  const [exportModalVisible, setExportModalVisible] = useState(false);
 
   const handleCopy = async () => {
     try {
@@ -166,12 +168,15 @@ const MessageActions = ({ text, timestamp, userEmail, credentials, sessionId }) 
   };
 
   return (
+    <>
     <ButtonGroup
       onItemClick={({ detail }) => {
         if (detail.id === 'copy') {
           handleCopy();
         } else if (detail.id === 'helpful' || detail.id === 'not-helpful') {
           handleFeedback(detail.id);
+        } else if (detail.id === 'export') {
+          setExportModalVisible(true);
         }
       }}
       ariaLabel="Chat bubble actions"
@@ -209,9 +214,21 @@ const MessageActions = ({ text, timestamp, userEmail, credentials, sessionId }) 
               Message copied
             </StatusIndicator>
           )
+        },
+        {
+          type: "icon-button",
+          id: "export",
+          iconName: "download",
+          text: "Export"
         }
       ]}
     />
+    <ExportModal
+      visible={exportModalVisible}
+      onDismiss={() => setExportModalVisible(false)}
+      markdownContent={text}
+    />
+    </>
   );
 };
 
