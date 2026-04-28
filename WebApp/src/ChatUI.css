@@ -1,150 +1,4 @@
-/* Chat Container styles  !! This needs to be cleaned up */
-/* Chat Container styles */
-.chat-container {
-  display: flex;
-  flex-direction: column;
-  /* padding: 0.5rem; */
-  position: relative;
-  flex: 1;
-  /* overflow-y: visible; */
-  /* height: 100%; */
-}
-
-.chat-ui-scroll-container {
-  flex: 1;
-  overflow-y: auto;
-  position: relative;
-  /* height: calc(100vh - 250px); */
-  max-height: calc(100vh - 295px);
-}
-
-/* Mobile responsive styles for chat container */
-@media (max-width: 768px) {
-  .chat-ui-scroll-container {
-    max-height: calc(100vh - 250px);
-  }
-}
-
-.chat-messages-wrapper {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  /* padding-bottom: 80px; */
-}
-
-.prompt-container {
-  position: fixed;
-  bottom: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 40%;
-  max-width: 800px;
-  /* z-index: 100; */
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
-  border-radius: 8px;
-  padding: 10px;
-  background: var(--color-background-layout-main);
-}
-
-/* Mobile responsive styles */
-@media (max-width: 768px) {
-  .prompt-container {
-    width: 90%;
-    bottom: 5px;
-    padding: 8px;
-  }
-}
-
-
-
-.prompt-wrapper {
-  position: relative;
-}
-
-.file-upload-container {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  margin-bottom: 10px;
-  background-color: var(--color-background-container-content);
-  border-radius: 4px;
-  padding: 5px;
-  z-index: 200;
-}
-
-/* Container wrapper styles */
-.chat-ui-content-wrapper {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  width: 100%;
-  padding: 0;
-  margin: 0;
-  position: relative; /* Add position relative */
-}
-
-/* Message Bubbles - Add this new section */
-.chat-message {
-  display: flex;
-  flex-direction: column;
-  position: relative;  /* Add this */
-  width: 100%;        /* Add this */
-}
-
-/* Message Bubbles - Update these selectors */
-.awsui-chat-bubble {
-  max-width: 85%;
-  margin: 8px 0;
-  position: relative;  /* Add this */
-}
-
-/* Mobile responsive styles for chat bubbles */
-@media (max-width: 768px) {
-  .awsui-chat-bubble {
-    max-width: 95%;
-  }
-}
-
-/* Ensure proper ordering */
-.chat-container > * {
-  order: unset !important;  /* Add this to prevent any automatic reordering */
-}
-
-/* Rest of your existing CSS remains the same */
-
-
-
-/* Message Bubbles */
-[data-messaging-type="outgoing"],
-[data-messaging-type="incoming"] {
-  max-width: 85%;
-  margin: 8px 0;
-}
-
-[data-messaging-type="outgoing"] {
-  align-self: flex-end;
-}
-
-[data-messaging-type="incoming"] {
-  align-self: flex-start;
-}
-
-/* Message Content Styling */
-[data-messaging-type="outgoing"] .awsui-chat-bubble-content {
-  background-color: #0972d3;
-  color: white;
-  border-radius: 8px;
-  padding: 12px;
-}
-
-[data-messaging-type="incoming"] .awsui-chat-bubble-content {
-  background-color: #f2f3f3;
-  border-radius: 8px;
-  padding: 12px;
-}
-
-/* Code Blocks */
+/* Code Blocks — always dark regardless of theme */
 .code-block-wrapper {
   position: relative;
   margin: 1em 0;
@@ -159,7 +13,6 @@
   padding: 2px 8px;
   font-size: 12px;
   font-family: 'Fira Code', 'Courier New', monospace;
-  margin-right: auto;
   background-color: #444;
   border-radius: 4px;
   border: 1px solid #555;
@@ -181,37 +34,66 @@
   background-color: #2d2d2d;
 }
 
+.code-block-footer button {
+  color: #fff;
+}
+
+.code-block-footer button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
 /* Inline Code */
 .inline-code {
   font-family: 'Fira Code', 'Courier New', monospace;
-  background-color: #2d2d2d;
-  color: #fff;
+  background-color: var(--color-secondary);
+  color: var(--color-foreground);
   padding: 0.2em 0.4em;
   border-radius: 4px;
   font-size: 90%;
   margin: 0 0.2em;
+}
+
+.dark .inline-code {
+  background-color: #2d2d2d;
+  color: #e0e0e0;
+}
+
+/* Bouncing dots animation */
+.bouncing-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  vertical-align: middle;
+}
+
+.bouncing-dots span {
   display: inline-block;
-  vertical-align: baseline;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+  opacity: 0.6;
+  animation: bounceDot 1.2s ease-in-out infinite;
 }
 
-/* Markdown Content */
-.awsui-chat-bubble-content p:not(:last-child) {
-  margin-bottom: 1em;
+.bouncing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.bouncing-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes bounceDot {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-6px); opacity: 1; }
 }
 
-.awsui-chat-bubble-content ul,
-.awsui-chat-bubble-content ol {
-  margin: 1em 0;
-  padding-left: 2em;
+/* Pulsing sparkle animation */
+.sparkle-pulse {
+  display: inline-block;
+  animation: sparklePulse 1.5s ease-in-out infinite;
+  font-size: 1em;
 }
 
-/* Button Interactions */
-.code-block-footer button {
-  transition: all 0.2s ease;
-}
-
-.code-block-footer button:hover {
-  background-color: #444;
+@keyframes sparklePulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
 }
 
 /* Cursor blink animation */
@@ -219,53 +101,15 @@
   display: inline-block;
   width: 0.6em;
   height: 1.2em;
-  background-color: #333;
+  background-color: currentColor;
   animation: blink 1s step-end infinite;
   margin-left: 2px;
   vertical-align: middle;
+  opacity: 0.7;
 }
 
 @keyframes blink {
   50% { opacity: 0; }
-}
-/* Persona Selector Styles */
-.persona-selector-container {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  background-color: var(--color-background-container-content);
-  border-radius: 6px;
-  border: 1px solid var(--color-border-divider-default);
-}
-
-.persona-active-indicator {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.8rem;
-  color: var(--color-text-status-success);
-}
-
-.persona-info-icon {
-  cursor: pointer;
-  color: var(--color-text-interactive-default);
-}
-
-.persona-info-icon:hover {
-  color: var(--color-text-interactive-hover);
-}
-
-/* Mobile responsive styles for persona selector */
-@media (max-width: 768px) {
-  .persona-selector-container {
-    padding: 2px 4px;
-    gap: 4px;
-  }
-  
-  .persona-active-indicator {
-    font-size: 0.7rem;
-  }
 }
 
 /* Citation Bar */
@@ -275,7 +119,7 @@
   gap: 8px;
   padding: 10px 0 0;
   margin-top: 10px;
-  border-top: 1px solid var(--color-border-divider-default, #e9ebed);
+  border-top: 1px solid var(--color-border);
 }
 
 .citation-bar-label {
@@ -284,7 +128,7 @@
   gap: 6px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--color-text-body-secondary, #5f6b7a);
+  color: var(--color-muted-foreground);
 }
 
 .citation-chips {
@@ -298,14 +142,19 @@
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  background: var(--color-background-button-normal-default, #fff);
-  border: 1px solid var(--color-border-button-normal-default, #7d8998);
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
   border-radius: 16px;
   font-size: 12px;
-  color: var(--color-text-body-default, #000716);
+  color: var(--color-foreground);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition: background 0.15s, border-color 0.15s;
   max-width: 200px;
+}
+
+.citation-chip:hover {
+  background: var(--color-accent);
+  border-color: var(--color-ring);
 }
 
 .citation-chip-number {
@@ -315,55 +164,11 @@
   min-width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #0972d3;
-  color: #ffffff;
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
   font-size: 10px;
   font-weight: 600;
-  line-height: 1;
 }
-
-.awsui-dark-mode .citation-chip-number,
-.awsui .awsui-dark-mode .citation-chip-number {
-  background: #539fe5;
-  color: #0d1b2a;
-}
-
-.citation-chip:hover {
-  background: var(--color-background-button-normal-hover, #e9ebed);
-  border-color: var(--color-border-button-normal-hover, #414d5c);
-}
-
-.citation-chip-flash {
-  animation: chipFlash 1.5s ease;
-}
-
-@keyframes chipFlash {
-  0%, 100% { box-shadow: none; }
-  20%, 60% { box-shadow: 0 0 0 3px var(--color-border-status-info, rgba(9, 114, 211, 0.4)); background: var(--color-background-status-info, #e8f0fe); }
-}
-
-/* Inline citation links in response text */
-.inline-citation-link {
-  display: inline;
-  background: none;
-  color: var(--color-text-link-default, #0972d3);
-  border: none;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 0;
-  margin: 0 1px;
-  cursor: pointer;
-  vertical-align: super;
-  line-height: 1.4;
-  text-decoration: underline;
-  transition: color 0.15s;
-}
-
-.inline-citation-link:hover {
-  color: var(--color-text-link-hover, #033160);
-  background: none;
-}
-
 
 .citation-chip-text {
   overflow: hidden;
@@ -371,11 +176,133 @@
   white-space: nowrap;
 }
 
+/* Inline citation links */
+.inline-citation-link {
+  display: inline;
+  background: none;
+  color: var(--color-primary);
+  border: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0;
+  margin: 0 1px;
+  cursor: pointer;
+  vertical-align: super;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.inline-citation-link:hover {
+  opacity: 0.8;
+}
+
+/* Prompt container */
+.prompt-container {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 42%;
+  max-width: 820px;
+  border-radius: 20px;
+  padding: 0;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  z-index: 10;
+  overflow: hidden;
+}
+
+.prompt-container .prompt-textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 18px 20px 10px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-foreground);
+  min-height: 44px;
+  max-height: 160px;
+}
+
+.prompt-container .prompt-textarea::placeholder {
+  color: var(--color-muted-foreground);
+}
+
+.prompt-container .prompt-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 12px;
+}
+
+.prompt-container .prompt-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prompt-container .prompt-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prompt-container .prompt-toolbar button.prompt-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-muted-foreground);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.prompt-container .prompt-toolbar button.prompt-icon-btn:hover {
+  background: var(--color-accent);
+  color: var(--color-foreground);
+  border-color: var(--color-muted-foreground);
+}
+
+.prompt-container .prompt-toolbar .prompt-send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: var(--color-foreground);
+  color: var(--color-background);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.prompt-container .prompt-toolbar .prompt-send-btn:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.prompt-container .prompt-toolbar .prompt-send-btn:not(:disabled):hover {
+  opacity: 0.85;
+}
+
+.prompt-container .prompt-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 16px 0;
+}
+
 @media (max-width: 768px) {
-  .citation-bar {
-    max-width: 95%;
-  }
-  .citation-chip {
-    max-width: 150px;
+  .prompt-container {
+    width: 92%;
+    bottom: 8px;
+    border-radius: 18px;
   }
 }

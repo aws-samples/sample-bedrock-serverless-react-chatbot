@@ -1,19 +1,13 @@
 // Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
-import React, { useState } from 'react';
-import {
-  Header,
-  SpaceBetween,
-  Form,
-  FormField,
-  Input,
-  Button,
-  Alert,
-  Spinner,
-  Textarea,
-  RadioGroup
-} from '@cloudscape-design/components';
-import { useContext } from 'react';
+import React, { useState, useContext } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Loader2 } from 'lucide-react';
 import { CredentialsContext } from './SessionContext';
 import { addWebsiteToCrawl } from './bedrockAgent';
 import { sanitizeForLog } from './utils/sanitize';
@@ -37,38 +31,15 @@ const WebsiteCrawler = () => {
     setLoading(true);
     setError(null);
     setSuccess(null);
-
     try {
-      // Validate URL format
-      if (!websiteUrl.match(/^https?:\/\/.+\..+/)) {
-        throw new Error('Please enter a valid URL starting with https://');
-      }
-
-      // Enforce HTTPS protocol for security
+      if (!websiteUrl.match(/^https?:\/\/.+\..+/)) throw new Error('Please enter a valid URL starting with https://');
       const secureUrl = enforceHttps(websiteUrl);
-
-      // Validate filters
-      if (!validateFilters(exclusionFilters)) {
-        throw new Error('Please enter at least one valid regex pattern for exclusion filters');
-      }
-
-      // Parse filters into arrays
+      if (!validateFilters(exclusionFilters)) throw new Error('Please enter at least one valid regex pattern for exclusion filters');
       const inclusionArray = inclusionFilters.split('\n').map(f => f.trim()).filter(f => f);
       const exclusionArray = exclusionFilters.split('\n').map(f => f.trim()).filter(f => f);
-
-      // Call the function to add website to crawl
-      const result = await addWebsiteToCrawl(
-        secureUrl, 
-        inclusionArray, 
-        exclusionArray,
-        scope,
-        rateLimit ? Number(rateLimit) : undefined,
-        Number(maxPages),
-        credentials
-      );
-      
+      await addWebsiteToCrawl(secureUrl, inclusionArray, exclusionArray, scope, rateLimit ? Number(rateLimit) : undefined, Number(maxPages), credentials);
       setSuccess(`Successfully added ${sanitizeForLog(secureUrl)} to crawl queue. Ingestion job started.`);
-      setWebsiteUrl(''); // Clear the input field
+      setWebsiteUrl('');
     } catch (err) {
       setError(`Failed to add website: ${sanitizeForLog(err.message)}`);
     } finally {
@@ -77,117 +48,68 @@ const WebsiteCrawler = () => {
   };
 
   return (
-      <SpaceBetween size="l" className="website-crawler-content">
-        
-        {error && (
-          <Alert type="error" dismissible onDismiss={() => setError(null)}>
-            {error}
-          </Alert>
-        )}
-        
-        {success && (
-          <Alert type="success" dismissible onDismiss={() => setSuccess(null)}>
-            {success}
-          </Alert>
-        )}
-        
-        <Form
-          actions={
-            <SpaceBetween direction="horizontal" size="xs">
-              <Button 
-                variant="primary" 
-                onClick={handleSubmit} 
-                disabled={loading || !websiteUrl.trim() || !exclusionFilters.trim()}
-              >
-                {loading ? <Spinner /> : "Add Website"}
-              </Button>
-            </SpaceBetween>
-          }
-        >
-          <FormField
-            label="Website URL"
-            description="Enter the URL of the website you want to crawl and add to your knowledge base"
-            constraintText="Must be a valid URL (HTTPS will be enforced for security)"
-          >
-            <Input
-              value={websiteUrl}
-              onChange={({ detail }) => setWebsiteUrl(detail.value)}
-              placeholder="https://example.com"
-              disabled={loading}
-            />
-          </FormField>
-          
-          <FormField
-            label="Inclusion Filters"
-            description="Regex patterns for URLs to include in the crawl (one per line)"
-            constraintText="Default is '.*' which includes all URLs"
-          >
-            <Textarea
-              value={inclusionFilters}
-              onChange={({ detail }) => setInclusionFilters(detail.value)}
-              placeholder=".*"
-              disabled={loading}
-            />
-          </FormField>
-          
-          <FormField
-            label="Exclusion Filters"
-            description="Regex patterns for URLs to exclude from the crawl (one per line)"
-            constraintText="At least one valid regex pattern is required"
-            errorText={exclusionFilters.trim() ? undefined : "At least one exclusion filter is required"}
-          >
-            <Textarea
-              value={exclusionFilters}
-              onChange={({ detail }) => setExclusionFilters(detail.value)}
-              placeholder=".*\\.pdf"
-              disabled={loading}
-              invalid={!exclusionFilters.trim()}
-            />
-          </FormField>
-          
-          <FormField
-            label="Crawl Scope"
-            description="Define the scope of the web crawler"
-          >
-            <RadioGroup
-              onChange={({ detail }) => setScope(detail.value)}
-              value={scope}
-              items={[
-                { value: "HOST_ONLY", label: "Host only (current domain only)" },
-                { value: "SUBDOMAINS", label: "Include subdomains" }
-              ]}
-              disabled={loading}
-            />
-          </FormField>
-          
-          <FormField
-            label="Max Pages"
-            description="Maximum number of pages to crawl"
-            constraintText="Must be a positive number"
-          >
-            <Input
-              value={maxPages}
-              onChange={({ detail }) => setMaxPages(detail.value)}
-              type="number"
-              disabled={loading}
-            />
-          </FormField>
-          
-          <FormField
-            label="Rate Limit (optional)"
-            description="Maximum number of requests per second"
-            constraintText="Leave empty for default rate limiting"
-          >
-            <Input
-              value={rateLimit}
-              onChange={({ detail }) => setRateLimit(detail.value)}
-              type="number"
-              placeholder="Optional"
-              disabled={loading}
-            />
-          </FormField>
-        </Form>
-      </SpaceBetween>
+    <div className="space-y-6 max-w-2xl mx-auto">
+      {error && (
+        <Alert variant="destructive" dismissible onDismiss={() => setError(null)}>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      {success && (
+        <Alert variant="success" dismissible onDismiss={() => setSuccess(null)}>
+          <AlertDescription>{success}</AlertDescription>
+        </Alert>
+      )}
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <div className="space-y-2">
+          <Label>Website URL</Label>
+          <p className="text-xs text-muted-foreground">Enter the URL of the website you want to crawl (HTTPS enforced)</p>
+          <Input value={websiteUrl} onChange={(e) => setWebsiteUrl(e.target.value)} placeholder="https://example.com" disabled={loading} />
+        </div>
+        <div className="space-y-2">
+          <Label>Inclusion Filters</Label>
+          <p className="text-xs text-muted-foreground">Regex patterns for URLs to include (one per line). Default '.*' includes all.</p>
+          <Textarea value={inclusionFilters} onChange={(e) => setInclusionFilters(e.target.value)} placeholder=".*" disabled={loading} rows={3} />
+        </div>
+        <div className="space-y-2">
+          <Label>Exclusion Filters</Label>
+          <p className="text-xs text-muted-foreground">Regex patterns for URLs to exclude (one per line). At least one required.</p>
+          <Textarea
+            value={exclusionFilters}
+            onChange={(e) => setExclusionFilters(e.target.value)}
+            placeholder=".*\.pdf"
+            disabled={loading}
+            rows={3}
+            className={!exclusionFilters.trim() ? 'border-destructive' : ''}
+          />
+          {!exclusionFilters.trim() && <p className="text-xs text-destructive">At least one exclusion filter is required</p>}
+        </div>
+        <div className="space-y-2">
+          <Label>Crawl Scope</Label>
+          <RadioGroup value={scope} onValueChange={setScope} disabled={loading}>
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="HOST_ONLY" id="host-only" />
+              <Label htmlFor="host-only" className="font-normal">Host only (current domain only)</Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="SUBDOMAINS" id="subdomains" />
+              <Label htmlFor="subdomains" className="font-normal">Include subdomains</Label>
+            </div>
+          </RadioGroup>
+        </div>
+        <div className="space-y-2">
+          <Label>Max Pages</Label>
+          <Input type="number" value={maxPages} onChange={(e) => setMaxPages(e.target.value)} disabled={loading} />
+        </div>
+        <div className="space-y-2">
+          <Label>Rate Limit (optional)</Label>
+          <p className="text-xs text-muted-foreground">Maximum requests per second. Leave empty for default.</p>
+          <Input type="number" value={rateLimit} onChange={(e) => setRateLimit(e.target.value)} placeholder="Optional" disabled={loading} />
+        </div>
+        <Button type="submit" disabled={loading || !websiteUrl.trim() || !exclusionFilters.trim()}>
+          {loading ? <><Loader2 className="h-4 w-4 animate-spin" />Adding...</> : "Add Website"}
+        </Button>
+      </form>
+    </div>
   );
 };
 
