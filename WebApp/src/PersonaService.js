@@ -137,6 +137,7 @@ export const PersonaService = {
       name: persona.name,
       description: persona.description,
       prompt: persona.prompt,
+      chatType: persona.chatType || 'LLM',
       documents: persona.documents || [],
       s3Prefix: persona.s3Prefix || `personas/${userId}/${personaId}/`,
       icon: 'gen-ai', // Always use default icon
@@ -212,6 +213,7 @@ export const PersonaService = {
           name: unmarshalled.name,
           description: unmarshalled.description,
           prompt: unmarshalled.prompt,
+          chatType: unmarshalled.chatType || 'LLM',
           documents: unmarshalled.documents || [],
           s3Prefix: unmarshalled.s3Prefix || `personas/${userId}/${unmarshalled.personaId}/`,
           icon: unmarshalled.icon,
@@ -319,6 +321,7 @@ export const PersonaService = {
           name: unmarshalled.name,
           description: unmarshalled.description,
           prompt: unmarshalled.prompt,
+          chatType: unmarshalled.chatType || 'LLM',
           documents: unmarshalled.documents || [],
           s3Prefix: unmarshalled.s3Prefix || `personas/${userId}/${personaId}/`,
           icon: unmarshalled.icon,
