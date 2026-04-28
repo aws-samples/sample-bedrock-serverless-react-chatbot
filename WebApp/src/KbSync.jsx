@@ -1,32 +1,31 @@
 // Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: MIT-0
-import React, { useState, useEffect, useContext } from 'react';
-import StatusIndicator from "@cloudscape-design/components/status-indicator";
-import Button from "@cloudscape-design/components/button";
-import FormField from "@cloudscape-design/components/form-field";
-import SpaceBetween from "@cloudscape-design/components/space-between";
+import React, { useState, useContext } from 'react';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { syncKnowledgeBase, getSyncStatus } from './bedrockAgent';
 import { CredentialsContext } from './SessionContext';
 
 export default function KnowledgeBaseSync() {
   const [jobId, setJobId] = useState(null);
   const credentials = useContext(CredentialsContext);
-  const [indicator, setIndicator] = useState(null);
+  const [status, setStatus] = useState(null); // 'loading' | 'success' | 'error'
   const [loading, setLoading] = useState(false);
 
-  // Sleep helper function
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const getKbSyncStatus = async (ingestionJobId) => {
     while (true) {
-      const status = await getSyncStatus(ingestionJobId, credentials);
-      if (status === "STARTING" || status === "IN_PROGRESS") {
-        setIndicator(<StatusIndicator type="in-progress">In progress</StatusIndicator>);
-      } else if (status === "COMPLETE") {
-        setIndicator(<StatusIndicator type="success">Success</StatusIndicator>);
+      const syncStatus = await getSyncStatus(ingestionJobId, credentials);
+      if (syncStatus === "STARTING" || syncStatus === "IN_PROGRESS") {
+        setStatus('loading');
+      } else if (syncStatus === "COMPLETE") {
+        setStatus('success');
         break;
-      } else if (status === "FAILED") {
-        setIndicator(<StatusIndicator type="error">Error</StatusIndicator>);
+      } else if (syncStatus === "FAILED") {
+        setStatus('error');
         break;
       }
       await sleep(5000);
@@ -39,30 +38,36 @@ export default function KnowledgeBaseSync() {
       const response = await syncKnowledgeBase(credentials);
       const ingestionJobId = response.ingestionJob.ingestionJobId;
       setJobId(ingestionJobId);
-      setIndicator(<StatusIndicator type="in-progress">In progress</StatusIndicator>);
+      setStatus('loading');
       await getKbSyncStatus(ingestionJobId);
     } catch (error) {
       console.error(error);
+      setStatus('error');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <>
-      <FormField
-        label="Knowledge Base Sync"
-        description="Click to sync your Bedrock Knowledge Base with recent documents uploaded to S3"
-      />
-      <SpaceBetween direction="vertical" size="xs">
-        <Button
-          variant="primary"
-          loading={loading}
-          onClick={handleSubmit}
-        >
-          Sync</Button>
-        {indicator}
-      </SpaceBetween>
-    </>
+    <div className="space-y-4">
+      <div>
+        <Label className="text-base font-semibold">Knowledge Base Sync</Label>
+        <p className="text-sm text-muted-foreground mt-1">
+          Click to sync your Bedrock Knowledge Base with recent documents uploaded to S3
+        </p>
+      </div>
+      <div className="flex items-center gap-3">
+        <Button onClick={handleSubmit} loading={loading}>Sync</Button>
+        {status === 'loading' && (
+          <Badge variant="info" className="gap-1"><Loader2 className="h-3 w-3 animate-spin" />In progress</Badge>
+        )}
+        {status === 'success' && (
+          <Badge variant="success" className="gap-1"><CheckCircle2 className="h-3 w-3" />Success</Badge>
+        )}
+        {status === 'error' && (
+          <Badge variant="destructive" className="gap-1"><XCircle className="h-3 w-3" />Error</Badge>
+        )}
+      </div>
+    </div>
   );
 }

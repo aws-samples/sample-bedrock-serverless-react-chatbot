@@ -10,6 +10,7 @@ import { CredentialsContext } from './SessionContext';
 import Layout from './AppLayout';
 import useSessionRefresh from './useSessionRefresh';
 import { fetchConfig } from './configService';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 Amplify.configure(awsconfig);
 
@@ -23,7 +24,6 @@ function App({ signOut, user }) {
     async function getInitialCredentials() {
       try {
         const session = await fetchAuthSession();
-        // Fetch runtime config using the JWT token before rendering the app
         const jwtToken = session.tokens?.idToken?.toString();
         if (jwtToken) {
           await fetchConfig(jwtToken);
@@ -41,24 +41,35 @@ function App({ signOut, user }) {
   }, []);
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return (
+      <div className="flex items-center justify-center h-screen bg-background text-foreground">
+        Loading...
+      </div>
+    );
   }
 
   if (configError) {
     return (
-      <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <h2>Configuration Error</h2>
-        <p>{configError}</p>
-        <button onClick={() => window.location.reload()}>Retry</button>
+      <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground gap-4">
+        <h2 className="text-xl font-semibold">Configuration Error</h2>
+        <p className="text-muted-foreground">{configError}</p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+        >
+          Retry
+        </button>
       </div>
     );
   }
 
   return (
     <CredentialsContext.Provider value={credentials}>
-      <div className="App">
-        <Layout signOut={signOut} user={user} />
-      </div>
+      <TooltipProvider>
+        <div className="App">
+          <Layout signOut={signOut} user={user} />
+        </div>
+      </TooltipProvider>
     </CredentialsContext.Provider>
   );
 }

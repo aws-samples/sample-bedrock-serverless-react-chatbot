@@ -491,31 +491,44 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
   // Add the new message with files or just text
   if (files && files.length > 0) {
     const content = [];
+    const imageFormats = ['png', 'jpeg', 'jpg', 'gif', 'webp'];
+    const documentFormats = ['txt', 'pdf', 'doc', 'docx', 'csv', 'md', 'html', 'xls', 'xlsx'];
 
     for (const file of files) {
       const fileContent = await file.arrayBuffer();
       const fileBytes = new Uint8Array(fileContent);
-      const format = file.name.split('.').pop().toLowerCase();
+      let format = file.name.split('.').pop().toLowerCase();
       
-      const sanitizedName = file.name
-        .replace(/\.[^/.]+$/, "")
-        .replace(/[^a-zA-Z0-9\s\-\(\)\[\]]/g, "-")
-        .replace(/\s+/g, " ")
-        .trim();
+      if (imageFormats.includes(format)) {
+        // Normalize 'jpg' to 'jpeg' for the Bedrock API
+        const imageFormat = format === 'jpg' ? 'jpeg' : format;
+        content.push({
+          image: {
+            format: imageFormat,
+            source: {
+              bytes: fileBytes
+            }
+          }
+        });
+      } else if (documentFormats.includes(format)) {
+        const sanitizedName = file.name
+          .replace(/\.[^/.]+$/, "")
+          .replace(/[^a-zA-Z0-9\s\-\(\)\[\]]/g, "-")
+          .replace(/\s+/g, " ")
+          .trim();
 
-      if (!['txt', 'pdf', 'doc', 'docx', 'csv', 'md', 'html', 'xls', 'xlsx'].includes(format)) {
+        content.push({
+          document: {
+            name: sanitizedName,
+            format: format,
+            source: {
+              bytes: fileBytes
+            }
+          }
+        });
+      } else {
         throw new Error(`Unsupported file format: ${format}`);
       }
-
-      content.push({
-        document: {
-          name: sanitizedName,
-          format: format,
-          source: {
-            bytes: fileBytes
-          }
-        }
-      });
     }
 
     content.push({
