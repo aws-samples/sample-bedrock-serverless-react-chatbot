@@ -285,7 +285,7 @@ $output_format_instructions`;
         },
         generationConfiguration: {
           promptTemplate: {
-            textPromptTemplate: bedrockConfig.defaultPrompt || defaultPromptTemplate,
+            textPromptTemplate: defaultPromptTemplate,
           },
           guardrailConfiguration: bedrockConfig.useGuardrail ? {
             guardrailId: bedrockConfig.guardrailId,
@@ -563,7 +563,7 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
       console.log('Sending messages to Bedrock:', JSON.stringify(messages, null, 2));
     }
 
-    const command = new ConverseStreamCommand({
+    const commandInput = {
       modelId,
       messages: messages.map(msg => ({
         role: msg.role,
@@ -578,7 +578,14 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
         trace: "enabled",
         streamProcessingMode: "sync",
       } : undefined,
-    });
+    };
+
+    if (config.debug) {
+      console.log('=== CONVERSE STREAM REQUEST ===');
+      console.log('ConverseStreamCommand input:', JSON.stringify(commandInput, null, 2));
+    }
+
+    const command = new ConverseStreamCommand(commandInput);
 
     const response = await bedrockClient.send(command);
     let responseText = '';

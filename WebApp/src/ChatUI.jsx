@@ -96,12 +96,12 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
       const onChunk = (chunk) => { setIsLoading(false); streamedResponse += chunk; setCurrentSessionMessages(prev => { const last = prev[prev.length - 1]; if (last?.role === 'assistant') return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: [{ text: streamedResponse }] } : m); return [...prev, { role: 'assistant', content: [{ text: streamedResponse }], timestamp: Date.now() }]; }); };
       if (chatType === 'RAG') {
         const supportsStreaming = (modelId === bedrockConfig.defaultModelId && bedrockConfig.defaultModelStream) || getModelItem(foundationModels, modelId, 'responseStreamingSupported');
-        if (supportsStreaming) { result = await invokeBedrockRetrieveAndGenerateStreamCommand(input, allFiles, ragSessionId, credentials, modelId, formattedHistory, onChunk, personaPrompt || null); if (result.fullResponse?.metrics) usageData = { inputTokens: result.fullResponse.metrics.inputTokenCount || 0, outputTokens: result.fullResponse.metrics.outputTokenCount || 0 }; }
+        if (supportsStreaming) { result = await invokeBedrockRetrieveAndGenerateStreamCommand(savedInput, allFiles, ragSessionId, credentials, modelId, formattedHistory, onChunk, personaPrompt || null); if (result.fullResponse?.metrics) usageData = { inputTokens: result.fullResponse.metrics.inputTokenCount || 0, outputTokens: result.fullResponse.metrics.outputTokenCount || 0 }; }
         else { result = await invokeBedrockAgent(enhancedInput, chatSessionId, credentials, []); }
         setRagSessionId(result.sessionId); citations = result.citations || [];
         if (citations.length > 0) setCurrentSessionMessages(prev => { const last = prev[prev.length - 1]; if (last?.role === 'assistant') return prev.map((m, i) => i === prev.length - 1 ? { ...m, citations } : m); return prev; });
       } else if (chatType === 'LLM') {
-        const response = await invokeBedrockConverseStreamCommand(input, allFiles, credentials, modelId, formattedHistory, onChunk, personaPrompt || null);
+        const response = await invokeBedrockConverseStreamCommand(savedInput, allFiles, credentials, modelId, formattedHistory, onChunk, personaPrompt || null);
         if (response?.usage) usageData = { inputTokens: response.usage.inputTokens || 0, outputTokens: response.usage.outputTokens || 0 };
       } else if (chatType === 'Agentic') {
         const d = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
