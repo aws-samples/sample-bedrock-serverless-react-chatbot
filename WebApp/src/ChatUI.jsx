@@ -200,8 +200,8 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
               <div className="prompt-toolbar-right">
                 <Popover open={modelPopoverOpen} onOpenChange={(open) => { setModelPopoverOpen(open); if (!open) setModelSearch(''); }}>
                   <PopoverTrigger asChild>
-                    <button className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 rounded-md">
-                      {modelOptions.find(m => m.value === modelId)?.label || 'Select model'} <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2.5 4L5 6.5L7.5 4" /></svg>
+                    <button className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 rounded-md max-w-[180px] sm:max-w-none">
+                      <span className="truncate">{modelOptions.find(m => m.value === modelId)?.label || 'Select model'}</span> <svg className="shrink-0" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2.5 4L5 6.5L7.5 4" /></svg>
                     </button>
                   </PopoverTrigger>
                   <PopoverContent className="w-[600px] p-0" align="end">

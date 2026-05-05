@@ -92,8 +92,14 @@ function Layout() {
       try {
         const models = await getBedrockModels(credentials);
         setFoundationModels(models.modelSummaries);
-        const formatted = models.modelSummaries.map(m => ({ id: m.modelId, text: `${m.providerName} ${m.modelName}`, detail: m.modelId }));
-        if (!formatted.some(m => m.id === bedrockConfig.defaultModelId)) formatted.push({ id: bedrockConfig.defaultModelId, text: `${bedrockConfig.defaultModelProvider} ${bedrockConfig.defaultModelName}`, detail: bedrockConfig.defaultModelId });
+        const formatted = models.modelSummaries.map(m => {
+          const name = m.modelName.startsWith(m.providerName) ? m.modelName : `${m.providerName} ${m.modelName}`;
+          return { id: m.modelId, text: name, detail: m.modelId };
+        });
+        if (!formatted.some(m => m.id === bedrockConfig.defaultModelId)) {
+          const defName = bedrockConfig.defaultModelName?.startsWith(bedrockConfig.defaultModelProvider) ? bedrockConfig.defaultModelName : `${bedrockConfig.defaultModelProvider} ${bedrockConfig.defaultModelName}`;
+          formatted.push({ id: bedrockConfig.defaultModelId, text: defName, detail: bedrockConfig.defaultModelId });
+        }
         formatted.sort((a, b) => a.text.localeCompare(b.text));
         setTopNavModels(formatted);
       } catch {}
@@ -173,7 +179,7 @@ function Layout() {
                       if (!msg?.question || !msg?.timestamp) return null;
                       const { inputTokens, outputTokens } = calculateSessionTokens(msg.sessionID);
                       return (
-                        <div key={msg.sessionID} className="group rounded-lg border border-border/40 p-2 cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => loadSessionHistory(msg.sessionID, msg.userID)}>
+                        <div key={msg.sessionID} className="group rounded-lg border border-border dark:border-white/15 p-2 cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => loadSessionHistory(msg.sessionID, msg.userID)}>
                           <div className="flex items-start justify-between gap-1">
                             <p className="text-sm font-medium border-l-2 border-primary pl-2 break-words leading-tight">{msg.question.length > 50 ? `${msg.question.substring(0, 47)}...` : msg.question}</p>
                             <button onClick={(e) => { e.stopPropagation(); handleDeleteConversation(msg.sessionID); }} className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-500 transition-all shrink-0"><Trash2 className="h-3.5 w-3.5" /></button>

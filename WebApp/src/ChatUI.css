@@ -206,7 +206,7 @@
   max-width: 820px;
   border-radius: 20px;
   padding: 0;
-  background: var(--color-card);
+  background: var(--color-secondary);
   border: 1px solid var(--color-border);
   z-index: 10;
   overflow: hidden;
@@ -275,6 +275,8 @@
   justify-content: center;
   width: 36px;
   height: 36px;
+  min-width: 36px;
+  flex-shrink: 0;
   border-radius: 50%;
   border: none;
   background: var(--color-foreground);
@@ -303,6 +305,6 @@
   .prompt-container {
     width: 92%;
     bottom: 8px;
-    border-radius: 18px;
+    border-radius: 24px;
   }
 }
