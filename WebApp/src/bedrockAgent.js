@@ -218,7 +218,7 @@ export const invokeBedrockAgent = async (prompt, sessionId, credentials, onChunk
   }
 };
 
-export const invokeBedrockRetrieveAndGenerateStreamCommand = async (prompt, files, sessionId, credentials, modelId, conversationHistory = [], onChunk) => {
+export const invokeBedrockRetrieveAndGenerateStreamCommand = async (prompt, files, sessionId, credentials, modelId, conversationHistory = [], onChunk, systemPrompt = null) => {
   if (!credentials) {
     throw new Error('Credentials not provided');
   }
@@ -250,7 +250,7 @@ export const invokeBedrockRetrieveAndGenerateStreamCommand = async (prompt, file
 
   // Default prompt template with instruction to acknowledge when information is not found
   // IMPORTANT: $output_format_instructions$ is REQUIRED for citations to work
-  const defaultPromptTemplate = `You are a helpful assistant. Use the following context from the knowledge base to answer the question.
+  const basePromptTemplate = bedrockConfig.defaultPrompt || `You are a helpful assistant. Use the following context from the knowledge base to answer the question.
 
 $search_results$
 
@@ -261,7 +261,12 @@ Instructions:
 - If the information needed to answer the question is not found in the context, respond with: "Sorry, I don't have information in my knowledge base to answer that question."
 - Be accurate and provide as much supporting information as possible in your responses
 
-$output_format_instructions$`;
+$output_format_instructions`;
+
+  // If a system prompt (persona) is provided, prepend it to the template
+  const defaultPromptTemplate = systemPrompt
+    ? `${systemPrompt}\n\n${basePromptTemplate}`
+    : basePromptTemplate;
 
   const input = {
     ...(sessionId && { sessionId }),
@@ -280,7 +285,7 @@ $output_format_instructions$`;
         },
         generationConfiguration: {
           promptTemplate: {
-            textPromptTemplate: bedrockConfig.defaultPrompt || defaultPromptTemplate,
+            textPromptTemplate: defaultPromptTemplate,
           },
           guardrailConfiguration: bedrockConfig.useGuardrail ? {
             guardrailId: bedrockConfig.guardrailId,
@@ -463,7 +468,7 @@ export const invokeBedrockConverseCommand = async (prompt, files, credentials, m
   }
 };
 
-export const invokeBedrockConverseStreamCommand = async (prompt, files, credentials, modelId, conversationHistory = [], onChunk) => {
+export const invokeBedrockConverseStreamCommand = async (prompt, files, credentials, modelId, conversationHistory = [], onChunk, systemPrompt = null) => {
   if (!credentials) {
     throw new Error('Credentials not provided');
   }
@@ -558,19 +563,29 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
       console.log('Sending messages to Bedrock:', JSON.stringify(messages, null, 2));
     }
 
-    const command = new ConverseStreamCommand({
+    const commandInput = {
       modelId,
       messages: messages.map(msg => ({
         role: msg.role,
         content: Array.isArray(msg.content) ? msg.content : [{ text: msg.content }]
       })),
+      ...(systemPrompt && {
+        system: [{ text: systemPrompt }]
+      }),
       guardrailConfig: bedrockConfig.useGuardrail ? { // GuardrailStreamConfiguration
         guardrailIdentifier: bedrockConfig.guardrailId, // from aws-config.js
         guardrailVersion: bedrockConfig.guardrailVersion, // from aws-config.js
         trace: "enabled",
         streamProcessingMode: "sync",
       } : undefined,
-    });
+    };
+
+    if (config.debug) {
+      console.log('=== CONVERSE STREAM REQUEST ===');
+      console.log('ConverseStreamCommand input:', JSON.stringify(commandInput, null, 2));
+    }
+
+    const command = new ConverseStreamCommand(commandInput);
 
     const response = await bedrockClient.send(command);
     let responseText = '';

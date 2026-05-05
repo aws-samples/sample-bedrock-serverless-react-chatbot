@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -25,7 +26,7 @@ const PersonaManager = ({ onPersonasChange }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingPersona, setEditingPersona] = useState(null);
-  const [formData, setFormData] = useState({ name: '', description: '', prompt: '', documents: [] });
+  const [formData, setFormData] = useState({ name: '', description: '', prompt: '', chatType: 'LLM', documents: [] });
   const [formErrors, setFormErrors] = useState({});
   const [alert, setAlert] = useState(null);
   const [userEmail, setUserEmail] = useState('');
@@ -100,11 +101,11 @@ const PersonaManager = ({ onPersonasChange }) => {
 
   const openEditModal = (persona) => {
     setEditingPersona(persona);
-    setFormData({ name: persona.name, description: persona.description, prompt: persona.prompt, documents: persona.documents || [] });
+    setFormData({ name: persona.name, description: persona.description, prompt: persona.prompt, chatType: persona.chatType || 'LLM', documents: persona.documents || [] });
     setShowEditModal(true);
   };
 
-  const resetForm = () => { setFormData({ name: '', description: '', prompt: '', documents: [] }); setFormErrors({}); };
+  const resetForm = () => { setFormData({ name: '', description: '', prompt: '', chatType: 'LLM', documents: [] }); setFormErrors({}); };
   const toggleSelection = (id) => { setSelectedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; }); };
   const canDeleteSelected = selectedIds.size > 0 && personas.some(p => selectedIds.has(p.id) && !p.isSystem);
 
@@ -119,6 +120,17 @@ const PersonaManager = ({ onPersonasChange }) => {
         <Label>Description</Label>
         <Input value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} placeholder="e.g., Specializes in marketing strategy" />
         {formErrors.description && <p className="text-xs text-destructive">{formErrors.description}</p>}
+      </div>
+      <div className="space-y-2">
+        <Label>Default Chat Type</Label>
+        <p className="text-xs text-muted-foreground">Automatically switch to this chat mode when this persona is selected</p>
+        <Select value={formData.chatType} onValueChange={(val) => setFormData({ ...formData, chatType: val })}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="LLM">General Chat</SelectItem>
+            <SelectItem value="RAG">Knowledge Base Chat (RAG)</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div className="space-y-2">
         <Label>System Prompt</Label>
@@ -155,6 +167,7 @@ const PersonaManager = ({ onPersonasChange }) => {
             <TableHead className="w-10"></TableHead>
             <TableHead>Name</TableHead>
             <TableHead>Description</TableHead>
+            <TableHead>Chat Type</TableHead>
             <TableHead>Documents</TableHead>
             <TableHead>Prompt</TableHead>
             <TableHead className="w-20">Actions</TableHead>
@@ -162,7 +175,7 @@ const PersonaManager = ({ onPersonasChange }) => {
         </TableHeader>
         <TableBody>
           {personas.length === 0 ? (
-            <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No personas found. Create your first custom persona to get started.</TableCell></TableRow>
+            <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No personas found. Create your first custom persona to get started.</TableCell></TableRow>
           ) : personas.map(item => (
             <TableRow key={item.id}>
               <TableCell><Checkbox checked={selectedIds.has(item.id)} onCheckedChange={() => toggleSelection(item.id)} /></TableCell>
@@ -175,6 +188,7 @@ const PersonaManager = ({ onPersonasChange }) => {
                 </div>
               </TableCell>
               <TableCell>{item.description}</TableCell>
+              <TableCell><Badge variant={item.chatType === 'RAG' ? 'info' : 'secondary'}>{item.chatType === 'RAG' ? 'RAG' : 'General'}</Badge></TableCell>
               <TableCell>
                 {item.documents?.length > 0
                   ? <Badge variant="success">{item.documents.length} doc{item.documents.length !== 1 ? 's' : ''}</Badge>
