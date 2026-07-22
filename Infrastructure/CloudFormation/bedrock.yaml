@@ -1,12 +1,20 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Bedrock Stack - Bedrock Agent, Knowledge Base, and OpenSearch Serverless
+Description: Bedrock Stack - Bedrock Agent, Knowledge Base, and vector store (OpenSearch Serverless or Amazon S3 Vectors)
 
 Conditions:
   HasGuardrailId: !Not [!Equals [!Ref GuardrailId, '']]
   CreateRAGResources: !Equals [!Ref SkipRag, "false"]
   SkipRAGResources: !Not [!Equals [!Ref SkipRag, "false"]]
+  # RAG enabled AND OpenSearch Serverless selected as the vector store
+  UseOpenSearch: !And
+    - !Equals [!Ref SkipRag, "false"]
+    - !Equals [!Ref VectorStore, "opensearch"]
+  # RAG enabled AND Amazon S3 Vectors selected as the vector store
+  UseS3Vectors: !And
+    - !Equals [!Ref SkipRag, "false"]
+    - !Equals [!Ref VectorStore, "s3vectors"]
 
 Parameters:
   SkipRag:
@@ -15,7 +23,18 @@ Parameters:
     AllowedValues:
       - "true"
       - "false"
-    Description: "Skip RAG resources (OpenSearch, KB, DataSource, IndexCreator)"
+    Description: "Skip RAG resources (vector store, KB, DataSource, IndexCreator)"
+
+  VectorStore:
+    Type: String
+    Default: "opensearch"
+    AllowedValues:
+      - "opensearch"
+      - "s3vectors"
+    Description: >-
+      Vector store backend for RAG. "opensearch" uses Amazon OpenSearch Serverless.
+      "s3vectors" uses Amazon S3 Vectors (lower cost, fully managed vector storage).
+      Ignored when SkipRag is "true".
 
   # Foundation Stack Outputs
   DynamoDBKMSKeyId:
@@ -126,9 +145,12 @@ Parameters:
 
 Resources:
 
+  # ==========================================================================
+  # OpenSearch Serverless index-creator Lambda (only when VectorStore=opensearch)
+  # ==========================================================================
   LambdaServiceRole:
     Type: AWS::IAM::Role
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -142,7 +164,7 @@ Resources:
 
   LambdaServiceRolePolicy:
     Type: AWS::IAM::ManagedPolicy
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Properties:
       ManagedPolicyName: !Sub 'LambdaServiceRolePolicy-${AWS::StackName}'
       Description: 'Managed policy for Lambda service role with S3 and CloudWatch Logs access'
@@ -230,7 +252,7 @@ Resources:
 
   OSSSecPolicyNetwork:
     Type: AWS::OpenSearchServerless::SecurityPolicy
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Properties:
       Policy: 
         !Sub |
@@ -241,7 +263,7 @@ Resources:
 
   OSSSecPolicyEncryption:
     Type: AWS::OpenSearchServerless::SecurityPolicy
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Properties:
       Policy: 
         !Sub |
@@ -252,7 +274,7 @@ Resources:
 
   OSSAccessPolicy:
     Type: AWS::OpenSearchServerless::AccessPolicy
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Properties:
       Policy: 
         !Sub |
@@ -288,7 +310,7 @@ Resources:
 
   OSSCollection:
     Type: AWS::OpenSearchServerless::Collection
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     DependsOn:
       - OSSSecPolicyEncryption
       - OSSSecPolicyNetwork
@@ -301,7 +323,7 @@ Resources:
 
   OSSCollectionLambdaAccess:
     Type: AWS::IAM::Policy
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     DependsOn: OSSCollection
     Properties:
       PolicyName: OSSCollectionAccess
@@ -318,7 +340,7 @@ Resources:
 
   BedrockKnowledgeBaseOSSAccess:
     Type: AWS::IAM::Policy
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     DependsOn: OSSCollection
     Properties:
       PolicyName: BedrockKnowledgeBaseOSSAccess
@@ -335,7 +357,7 @@ Resources:
 
   DependencyLayer:
     Type: AWS::Lambda::LayerVersion
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Properties:
       CompatibleRuntimes:
         - python3.13
@@ -346,7 +368,7 @@ Resources:
 
   IndexCreatorFunction:
     Type: AWS::Lambda::Function
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     DependsOn: LambdaServiceRole
     Properties:
       FunctionName: !Sub IndexCreatorFunction-${AWS::StackName}
@@ -480,7 +502,7 @@ Resources:
            
   IndexCreator:
     Type: Custom::IndexCreator
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     DependsOn:
       - OSSCollection
       - OSSCollectionLambdaAccess
@@ -492,7 +514,7 @@ Resources:
 
   BedrockKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     DependsOn:
       - OSSCollection
       - IndexCreator
@@ -515,12 +537,98 @@ Resources:
             TextField: "AMAZON_BEDROCK_TEXT_CHUNK"
             MetadataField: "AMAZON_BEDROCK_METADATA"
 
+  # ==========================================================================
+  # Amazon S3 Vectors vector store (only when VectorStore=s3vectors)
+  # ==========================================================================
+  # S3 vector bucket that holds the vector index. Encrypted with the Foundation
+  # stack's customer managed S3 KMS key. Names are auto-generated by
+  # CloudFormation to avoid collisions.
+  S3VectorBucket:
+    Type: AWS::S3Vectors::VectorBucket
+    Condition: UseS3Vectors
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      EncryptionConfiguration:
+        SseType: aws:kms
+        KmsKeyArn: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/${S3KMSKeyId}
+
+  # Vector index sized for the Amazon Titan Text Embeddings V2 model (1024
+  # dimensions). Bedrock Knowledge Bases stores the chunk text and document
+  # metadata as non-filterable metadata keys, so they must be declared here.
+  S3VectorIndex:
+    Type: AWS::S3Vectors::Index
+    Condition: UseS3Vectors
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      VectorBucketArn: !GetAtt S3VectorBucket.VectorBucketArn
+      DataType: float32
+      Dimension: 1024
+      DistanceMetric: cosine
+      MetadataConfiguration:
+        NonFilterableMetadataKeys:
+          - AMAZON_BEDROCK_TEXT
+          - AMAZON_BEDROCK_METADATA
+
+  # Grants the Bedrock Knowledge Base role read/write access to the S3 vector
+  # index. This must exist before the KB is created because Bedrock validates
+  # index access during CreateKnowledgeBase.
+  BedrockKnowledgeBaseS3VectorsAccess:
+    Type: AWS::IAM::Policy
+    Condition: UseS3Vectors
+    Properties:
+      PolicyName: BedrockKnowledgeBaseS3VectorsAccess
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: S3VectorBucketReadAndWrite
+            Effect: Allow
+            Action:
+              - s3vectors:GetIndex
+              - s3vectors:QueryVectors
+              - s3vectors:PutVectors
+              - s3vectors:GetVectors
+              - s3vectors:ListVectors
+              - s3vectors:DeleteVectors
+            Resource:
+              - !GetAtt S3VectorBucket.VectorBucketArn
+              - !GetAtt S3VectorIndex.IndexArn
+          - Sid: BedrockEmbeddingModelInvoke
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+            Resource:
+              - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+      Roles:
+        - !Ref BedrockKnowledgeBaseRole
+
+  BedrockKnowledgeBaseS3Vectors:
+    Type: AWS::Bedrock::KnowledgeBase
+    Condition: UseS3Vectors
+    DependsOn:
+      - S3VectorIndex
+      - BedrockKnowledgeBaseS3VectorsAccess
+    Properties:
+      Name: !Ref KnowledgeBaseName
+      Description: !Ref KnowledgeBaseDescription
+      RoleArn: !GetAtt BedrockKnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: "VECTOR"
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0"
+          EmbeddingModelConfiguration:
+            BedrockEmbeddingModelConfiguration:
+              Dimensions: 1024
+              EmbeddingDataType: FLOAT32
+      StorageConfiguration:
+        Type: "S3_VECTORS"
+        S3VectorsConfiguration:
+          IndexArn: !GetAtt S3VectorIndex.IndexArn
+
   BedrockKnowledgeBaseSpecificAccess:
     Type: AWS::IAM::Policy
     Condition: CreateRAGResources
-    DependsOn:
-      - OSSCollection
-      - BedrockKnowledgeBase
     Properties:
       PolicyName: BedrockKnowledgeBaseSpecificAccess
       PolicyDocument:
@@ -541,7 +649,9 @@ Resources:
               - bedrock:ListIngestionJobs
               - bedrock:StartIngestionJob
               - bedrock:StopIngestionJob
-            Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${BedrockKnowledgeBase}
+            Resource: !Sub
+              - arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KbId}
+              - KbId: !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
           # Embedding Model Access
           - Effect: Allow
             Action:
@@ -555,11 +665,10 @@ Resources:
     Type: AWS::Bedrock::DataSource
     Condition: CreateRAGResources
     DependsOn: 
-      - BedrockKnowledgeBase
       - BedrockKnowledgeBaseSpecificAccess
     Properties:
       Name: MyKnowledgebaseDataSource
-      KnowledgeBaseId: !Ref BedrockKnowledgeBase
+      KnowledgeBaseId: !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
       DataSourceConfiguration:
         Type: S3
         S3Configuration:
@@ -594,7 +703,9 @@ Resources:
               Action:
                 - bedrock:Retrieve
                 - bedrock:RetrieveAndGenerate
-              Resource: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${BedrockKnowledgeBase}'
+              Resource: !Sub
+                - 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KbId}'
+                - KbId: !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
             - !Ref AWS::NoValue
           - Sid: S3PersonaBucketAccess
             Effect: Allow
@@ -698,7 +809,7 @@ Resources:
         - !Ref AWS::NoValue
       KnowledgeBases: !If
         - CreateRAGResources
-        - - KnowledgeBaseId: !Ref BedrockKnowledgeBase
+        - - KnowledgeBaseId: !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
             Description: "Use this knowledge base to answer questions about our documentation and internal processes."
             KnowledgeBaseState: ENABLED
         - !Ref AWS::NoValue
@@ -727,7 +838,9 @@ Resources:
                 Action:
                   - bedrock:Retrieve
                   - bedrock:RetrieveAndGenerate
-                Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${BedrockKnowledgeBase}
+                Resource: !Sub
+                  - arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KbId}
+                  - KbId: !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
               - !Ref AWS::NoValue
             # Agent specific permissions
             - Effect: Allow
@@ -775,23 +888,37 @@ Outputs:
     Value: !GetAtt BedrockAgentResourceRole.Arn
   BedrockKnowledgeBaseId:
     Description: ID of the Bedrock Knowledge Base
-    Value: !If [CreateRAGResources, !Ref BedrockKnowledgeBase, "NONE"]
+    Value: !If
+      - CreateRAGResources
+      - !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
+      - "NONE"
+  VectorStoreType:
+    Description: Vector store backend used for RAG (opensearch, s3vectors, or none)
+    Value: !If [CreateRAGResources, !Ref VectorStore, "none"]
+  S3VectorBucketArn:
+    Condition: UseS3Vectors
+    Description: ARN of the S3 vector bucket used for RAG
+    Value: !GetAtt S3VectorBucket.VectorBucketArn
+  S3VectorIndexArn:
+    Condition: UseS3Vectors
+    Description: ARN of the S3 vector index used for RAG
+    Value: !GetAtt S3VectorIndex.IndexArn
   BedrockDataSourceId:
     Description: ID of the Bedrock Data Source
     Value: !If [CreateRAGResources, !GetAtt BedrockDataSource.DataSourceId, "NONE"]
   LambdaFunctionName:
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Description: Name of the Index Creator Lambda function
     Value: !Ref IndexCreatorFunction
   LambdaRoleArn:
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Description: ARN of the Lambda service role
     Value: !GetAtt LambdaServiceRole.Arn
   LambdaRoleName:
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Description: Name of the Lambda service role
     Value: !Ref LambdaServiceRole
   LambdaPolicyArn:
-    Condition: CreateRAGResources
+    Condition: UseOpenSearch
     Description: ARN of the custom Lambda policy
     Value: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${LambdaServiceRole}/LambdaS3AndAOSSAccess"

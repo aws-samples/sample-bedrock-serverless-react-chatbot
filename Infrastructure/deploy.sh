@@ -403,6 +403,8 @@ ROLLBACK=false
 DEBUG=false
 SKIP_RAG=false
 SKIP_RAG_SET=false
+VECTOR_STORE=""
+VECTOR_STORE_SET=false
 while [[ $# -gt 0 ]]; do
   key="$1"
   case $key in
@@ -499,6 +501,12 @@ while [[ $# -gt 0 ]]; do
     SKIP_RAG_SET=true
     shift
     ;;
+    --vector-store)
+    VECTOR_STORE="$2"
+    VECTOR_STORE_SET=true
+    shift
+    shift
+    ;;
     *)
     shift
     ;;
@@ -543,6 +551,8 @@ if [ -z "$STACK_NAME" ]; then
   echo "  --debug                               Print full CloudFormation commands (for debugging)"
   echo "  --rollback                            Delete all stacks (cleanup)"
   echo "  --skip-rag                            Skip RAG infrastructure (works with any endpoint type)"
+  echo "  --vector-store <type>                 RAG vector store: opensearch or s3vectors (default: opensearch)"
+  echo "                                        s3vectors uses Amazon S3 Vectors (lower cost, fully managed)."
   exit 1
 fi
 
@@ -732,6 +742,61 @@ if [ "$SKIP_RAG" = true ]; then
   CHAT_TYPE="LLM"
 fi
 
+# Select the RAG vector store backend (only relevant when RAG is deployed)
+if [ "$SKIP_RAG" = true ]; then
+  # Vector store is unused when RAG is skipped; default keeps CloudFormation happy
+  VECTOR_STORE="opensearch"
+else
+  # Prompt for the vector store when it was not provided on the CLI
+  if [ "$VECTOR_STORE_SET" = false ]; then
+    echo ""
+    echo "Select the vector store for RAG:"
+    echo "  1) opensearch - Amazon OpenSearch Serverless (default)"
+    echo "  2) s3vectors  - Amazon S3 Vectors (lower cost, fully managed)"
+    echo ""
+
+    while true; do
+      read -p "Enter vector store [opensearch]: " vector_store_input
+
+      # Default to opensearch if the user just presses enter
+      if [ -z "$vector_store_input" ]; then
+        VECTOR_STORE="opensearch"
+        break
+      fi
+
+      vector_store_lower=$(echo "$vector_store_input" | tr '[:upper:]' '[:lower:]')
+
+      case "$vector_store_lower" in
+        opensearch|1)
+          VECTOR_STORE="opensearch"
+          break
+          ;;
+        s3vectors|s3-vectors|2)
+          VECTOR_STORE="s3vectors"
+          break
+          ;;
+        *)
+          echo "Invalid input. Please enter 'opensearch' or 's3vectors'."
+          ;;
+      esac
+    done
+    echo ""
+  fi
+
+  # Normalize CLI-provided value to lowercase and accept common aliases
+  VECTOR_STORE=$(echo "$VECTOR_STORE" | tr '[:upper:]' '[:lower:]')
+  if [ "$VECTOR_STORE" = "s3-vectors" ]; then
+    VECTOR_STORE="s3vectors"
+  fi
+
+  # Validate the selected value
+  if [ "$VECTOR_STORE" != "opensearch" ] && [ "$VECTOR_STORE" != "s3vectors" ]; then
+    echo "Error: Invalid --vector-store value '$VECTOR_STORE'"
+    echo "Valid values are: opensearch or s3vectors"
+    exit 1
+  fi
+fi
+
 echo "=========================================="
 echo "AWS Bedrock Agent Chatbot Deployment"
 echo "=========================================="
@@ -744,6 +809,9 @@ echo "Email Domain: $EMAIL_DOMAIN"
 echo "Stream Responses: $STREAM_RESPONSES"
 echo "GovCloud: $IS_GOVCLOUD"
 echo "Skip RAG: $SKIP_RAG"
+if [ "$SKIP_RAG" != true ]; then
+  echo "Vector Store: $VECTOR_STORE"
+fi
 if [ "$IS_GOVCLOUD" = true ]; then
   echo "API Gateway Name: $API_GATEWAY_NAME"
   echo "API Gateway Endpoint Type: $API_GATEWAY_ENDPOINT_TYPE"
@@ -988,7 +1056,8 @@ deploy_stack "$STACK_NAME-bedrock" "CloudFormation/bedrock.yaml" \
   "AgentFoundationModel=$MODEL_ID" \
   "AgentInstruction=You are a helpful AI assistant. You will only answer based on information from your knowledge base. Never hallucinate, simply say you don't know if you don't have citable information in your knowledge base." \
   "OSSCollectionName=$STACK_NAME-oss" \
-  "SkipRag=$SKIP_RAG"
+  "SkipRag=$SKIP_RAG" \
+  "VectorStore=$VECTOR_STORE"
 
 # Extract Bedrock stack outputs
 echo "Extracting Bedrock stack outputs..."

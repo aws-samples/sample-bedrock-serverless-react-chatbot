@@ -96,6 +96,25 @@ Resources:
             Condition:
               StringEquals:
                 'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+
+          # Amazon S3 Vectors performs asynchronous indexing under its own
+          # service principal, which must be granted access to the customer
+          # managed key used to encrypt the vector bucket/index. Scoped to
+          # this account's S3 Vectors buckets in this region.
+          - Sid: Allow S3 Vectors Service to Use Key
+            Effect: Allow
+            Principal:
+              Service: indexing.s3vectors.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:GenerateDataKey'
+              - 'kms:DescribeKey'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref 'AWS::AccountId'
+              ArnLike:
+                'aws:SourceArn': !Sub 'arn:${AWS::Partition}:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/*'
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-s3-key'
