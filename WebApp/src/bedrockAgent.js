@@ -160,7 +160,11 @@ export const invokeBedrockAgent = async (prompt, sessionId, credentials, onChunk
   });
 
   if (config.debug) {
-    console.log(credentials);
+    // Never log raw credentials (accessKeyId/secretAccessKey/sessionToken).
+    // Log only non-sensitive metadata to confirm credentials were resolved.
+    console.log('Credentials resolved:', credentials
+      ? { hasAccessKeyId: !!credentials.accessKeyId, expiration: credentials.expiration }
+      : 'none');
   }
 
   try {

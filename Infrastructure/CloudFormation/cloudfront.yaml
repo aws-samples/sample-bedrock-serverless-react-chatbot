@@ -59,6 +59,17 @@ Resources:
     Type: AWS::S3::Bucket
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
+    Metadata:
+      # Access-log storage bucket (holds CloudFront access logs). Access-logging
+      # rules are suppressed to avoid recursive self-logging; this bucket already
+      # ships its own S3 server access logs to the central S3AccessLogsBucket.
+      checkov:
+        skip:
+          - id: CKV_AWS_18
+            comment: "Access-log storage bucket; enabling access logging would create a recursive self-logging loop."
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED # Access-log storage bucket; enabling access logging would create a recursive self-logging loop.
     Properties:
       BucketName: !Sub '${AWS::StackName}-cloudfront-logs-${UniqueSuffix}'
       BucketEncryption:
@@ -152,6 +163,20 @@ Resources:
   
   CloudFrontDistribution:
     Type: "AWS::CloudFront::Distribution"
+    Metadata:
+      # Accepted risk: this sample uses the default *.cloudfront.net certificate
+      # (CloudFrontDefaultCertificate: true). With the default certificate, CloudFront
+      # applies the TLSv1 security policy and MinimumProtocolVersion cannot be enforced
+      # without attaching a custom ACM certificate + alternate domain name. TLS 1.3 is
+      # enabled by default on all CloudFront distributions. Enforcing TLSv1.2_2021
+      # requires a custom domain, which is out of scope for this sample.
+      checkov:
+        skip:
+          - id: CKV_AWS_174
+            comment: "Accepted risk: default CloudFront certificate cannot enforce MinimumProtocolVersion; requires a custom ACM cert + domain. TLS 1.3 is enabled by default."
+      guard:
+        SuppressedRules:
+          - CLOUDFRONT_CUSTOM_SSL_CERTIFICATE
     Properties:
       DistributionConfig: 
         Origins: 

@@ -795,6 +795,19 @@ else
     echo "Valid values are: opensearch or s3vectors"
     exit 1
   fi
+
+  # Gate: Amazon S3 Vectors for Bedrock Knowledge Bases is not yet available
+  # in GovCloud (us-gov-*). Block it early so the deployment fails fast with a
+  # clear message instead of a CloudFormation rollback on the bedrock stack.
+  # Remove this gate once S3 Vectors launches in GovCloud.
+  if [ "$IS_GOVCLOUD" = true ] && [ "$VECTOR_STORE" = "s3vectors" ]; then
+    echo "Error: --vector-store s3vectors is not supported in GovCloud ($REGION)."
+    echo "Amazon S3 Vectors for Bedrock Knowledge Bases is not yet available in the"
+    echo "aws-us-gov partition. Use '--vector-store opensearch' (Amazon OpenSearch"
+    echo "Serverless) instead. This restriction can be removed once S3 Vectors"
+    echo "launches in GovCloud."
+    exit 1
+  fi
 fi
 
 echo "=========================================="

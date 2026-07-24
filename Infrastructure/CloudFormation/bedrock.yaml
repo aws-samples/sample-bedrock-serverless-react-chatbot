@@ -3,6 +3,24 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Bedrock Stack - Bedrock Agent, Knowledge Base, and vector store (OpenSearch Serverless or Amazon S3 Vectors)
 
+Rules:
+  # Amazon S3 Vectors for Bedrock Knowledge Bases is not yet available in
+  # GovCloud (aws-us-gov partition). Reject the stack at create/validate time
+  # so it fails fast with a clear message instead of rolling back on the
+  # KnowledgeBase resource. Remove this rule once S3 Vectors launches in GovCloud.
+  S3VectorsNotSupportedInGovCloud:
+    RuleCondition: !Equals [!Ref VectorStore, "s3vectors"]
+    Assertions:
+      - Assert: !Not
+          - !Contains
+            - ["us-gov-west-1", "us-gov-east-1"]
+            - !Ref "AWS::Region"
+        AssertDescription: >-
+          VectorStore "s3vectors" is not supported in GovCloud. Amazon S3 Vectors
+          for Bedrock Knowledge Bases is not yet available in the aws-us-gov
+          partition. Set VectorStore to "opensearch" (Amazon OpenSearch Serverless)
+          when deploying to us-gov-west-1 or us-gov-east-1.
+
 Conditions:
   HasGuardrailId: !Not [!Equals [!Ref GuardrailId, '']]
   CreateRAGResources: !Equals [!Ref SkipRag, "false"]

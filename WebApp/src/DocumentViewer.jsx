@@ -18,6 +18,7 @@ const SafeHtml = ({ html, className }) => {
   const containerRef = useRef(null);
   useEffect(() => {
     if (containerRef.current) {
+      // nosemgrep: javascript.browser.security.insecure-innerhtml,javascript.browser.security.insecure-document-method -- value is sanitized with DOMPurify.sanitize() before assignment
       containerRef.current.innerHTML = DOMPurify.sanitize(html, { ADD_TAGS: ['mark'], ADD_ATTR: ['data-citation'] });
     }
   }, [html]);
@@ -185,6 +186,7 @@ const DocxViewer = ({ url, citationTexts }) => {
         setLoading(true);
         const response = await fetch(url); const arrayBuffer = await response.arrayBuffer();
         const result = await mammoth.convertToHtml({ arrayBuffer }); let html = result.value;
+        // nosemgrep: javascript.browser.security.insecure-innerhtml,javascript.browser.security.insecure-document-method -- value is sanitized with DOMPurify.sanitize() before assignment
         const tempDiv = document.createElement('div'); tempDiv.innerHTML = DOMPurify.sanitize(html); const plainText = tempDiv.textContent || '';
         citationTexts.forEach((citation, idx) => {
           if (!citation || citation.length < 10) return;
@@ -214,6 +216,7 @@ const TextViewer = ({ url, citationTexts, extension }) => {
   if (loading) return <div className="text-center py-8"><Loader2 className="h-8 w-8 animate-spin mx-auto" /></div>;
   if (error) return <div className="text-center py-8"><Badge variant="destructive">{error}</Badge></div>;
   if (extension === '.html' || extension === '.htm') {
+    // nosemgrep: javascript.browser.security.insecure-innerhtml,javascript.browser.security.insecure-document-method -- value is sanitized with DOMPurify.sanitize() before assignment
     let html = content; const tempDiv = document.createElement('div'); tempDiv.innerHTML = DOMPurify.sanitize(html); const plainText = tempDiv.textContent || '';
     citationTexts.forEach((citation, idx) => { if (!citation || citation.length < 10) return; const match = findCitationInText(plainText, citation); if (!match) return; const snippet = plainText.substring(match.start, Math.min(match.start + 80, match.end)); const pattern = snippet.split('').map(ch => { if (/[.*+?^${}()|[\]\\]/.test(ch)) return '\\' + ch; if (/\s/.test(ch)) return '[\\s\\S]*?'; return ch; }).join(''); try { html = html.replace(new RegExp(pattern, 'i'), (m) => '<mark class="doc-viewer-highlight" data-citation="' + idx + '">' + m + '</mark>'); } catch { /* skip */ } });
     return <SafeHtml className="doc-viewer-html-content" html={html} />;

@@ -722,6 +722,13 @@ Resources:
 
   ConfigApiStage:
     Type: AWS::ApiGateway::Stage
+    Metadata:
+      # X-Ray tracing is an observability feature, not a security control, so it
+      # provides no security benefit for this API. CKV_AWS_73 is suppressed.
+      checkov:
+        skip:
+          - id: CKV_AWS_73
+            comment: "X-Ray tracing is an observability feature with no security benefit for this API; intentionally not enabled."
     Properties:
       RestApiId: !Ref ConfigApiGateway
       StageName: v1

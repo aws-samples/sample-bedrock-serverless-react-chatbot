@@ -4,6 +4,10 @@ This is a sample Amazon Bedrock powered serverless chatbot that's deployed throu
 
 **Note: This solution is designed for Proof of Concept (POC) usage and is not intended for production deployment.**
 
+> **Update — Amazon S3 Vectors support for Knowledge Bases:** The Bedrock stack now supports **Amazon S3 Vectors** as the vector store backing the Amazon Bedrock Knowledge Base vector index, as an alternative to Amazon OpenSearch Serverless. Select it at deploy time with `--vector-store s3vectors` (default remains `opensearch`). With this backend, the Knowledge Base uses an S3 vector bucket and vector index for embedding storage and similarity search, which lowers cost and removes the need to manage an OpenSearch Serverless collection.
+>
+> **Availability:** Amazon S3 Vectors for Bedrock Knowledge Bases is currently available **only in the AWS Commercial (`aws`) partition**. It is **not yet available in AWS GovCloud (US) (`aws-us-gov`)**, so `--vector-store s3vectors` is blocked when deploying to GovCloud; use `--vector-store opensearch` there. This solution will be updated to support S3 Vectors deployments in GovCloud once the feature becomes available in that partition.
+
 ## Table of Contents
 
 - [Serverless Amazon Bedrock React Chatbot](#serverless-amazon-bedrock-react-chatbot)

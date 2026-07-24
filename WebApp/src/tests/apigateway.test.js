@@ -277,6 +277,12 @@ describe('API Gateway Stack CloudFormation Template', () => {
       expect(integration.Uri['Fn::Sub']).toContain('s3:path');
     });
 
+    test('GET integration URI should pin the UICodeS3Bucket parameter', () => {
+      // Bucket is fixed server-side (not client-controlled via a path segment)
+      const method = template.Resources.ApiGatewayMethod;
+      expect(method.Properties.Integration.Uri['Fn::Sub']).toContain('${UICodeS3Bucket}');
+    });
+
     test('GET method should use IAM role credentials', () => {
       const method = template.Resources.ApiGatewayMethod;
       const integration = method.Properties.Integration;
@@ -301,11 +307,10 @@ describe('API Gateway Stack CloudFormation Template', () => {
       expect(resource.Properties.PathPart).toBe('chatbot');
     });
 
-    test('should create folder path parameter resource', () => {
-      const resource = template.Resources.ApiGatewayResource;
-      expect(resource).toBeDefined();
-      expect(resource.Type).toBe('AWS::ApiGateway::Resource');
-      expect(resource.Properties.PathPart).toBe('{folder}');
+    test('should not create a folder path parameter resource', () => {
+      // The bucket is pinned server-side in the S3 integration URI, so the
+      // {folder} path segment was removed from the API path.
+      expect(template.Resources.ApiGatewayResource).toBeUndefined();
     });
 
     test('should create item path parameter resource', () => {
@@ -313,6 +318,11 @@ describe('API Gateway Stack CloudFormation Template', () => {
       expect(resource).toBeDefined();
       expect(resource.Type).toBe('AWS::ApiGateway::Resource');
       expect(resource.Properties.PathPart).toBe('{item+}');
+    });
+
+    test('item resource should be nested directly under chatbot resource', () => {
+      const resource = template.Resources.ApiGatewayResource2;
+      expect(resource.Properties.ParentId.Ref).toBe('ChatbotResource');
     });
   });
 
@@ -393,9 +403,11 @@ describe('API Gateway Stack CloudFormation Template', () => {
       expect(output.Value['Fn::Sub']).toContain('index.html');
     });
 
-    test('outputs should reference UICodeS3Bucket parameter', () => {
+    test('user URL should not embed the bucket name in the path', () => {
+      // Bucket is pinned in the integration URI, so it is no longer part of the URL.
       const userUrl = template.Outputs.UserURL;
-      expect(userUrl.Value['Fn::Sub']).toContain('UICodeS3Bucket');
+      expect(userUrl.Value['Fn::Sub']).not.toContain('UICodeS3Bucket');
+      expect(userUrl.Value['Fn::Sub']).toContain('/chatbot/index.html');
     });
   });
 
