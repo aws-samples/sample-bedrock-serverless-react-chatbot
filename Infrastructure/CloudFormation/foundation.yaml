@@ -96,6 +96,25 @@ Resources:
             Condition:
               StringEquals:
                 'kms:ViaService': !Sub 's3.${AWS::Region}.amazonaws.com'
+
+          # Amazon S3 Vectors performs asynchronous indexing under its own
+          # service principal, which must be granted access to the customer
+          # managed key used to encrypt the vector bucket/index. Scoped to
+          # this account's S3 Vectors buckets in this region.
+          - Sid: Allow S3 Vectors Service to Use Key
+            Effect: Allow
+            Principal:
+              Service: indexing.s3vectors.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:GenerateDataKey'
+              - 'kms:DescribeKey'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref 'AWS::AccountId'
+              ArnLike:
+                'aws:SourceArn': !Sub 'arn:${AWS::Partition}:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/*'
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-s3-key'
@@ -233,6 +252,17 @@ Resources:
   
   S3AccessLogsBucket:
     Type: AWS::S3::Bucket
+    Metadata:
+      # This bucket is the destination for S3 server access logs. Enabling access
+      # logging on it would make it log to itself, creating a recursive loop, so the
+      # S3 access-logging rules are intentionally suppressed for both scanners.
+      checkov:
+        skip:
+          - id: CKV_AWS_18
+            comment: "Access-log storage bucket; enabling access logging would create a recursive self-logging loop."
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED # Access-log storage bucket; enabling access logging would create a recursive self-logging loop.
     Properties:
       BucketName: !Sub '${AWS::StackName}-s3-access-logs-${UniqueSuffix}'
       BucketEncryption:

@@ -11,6 +11,16 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Upload, X, FileIcon, Trash2, Info } from 'lucide-react';
 
+// Strip any directory components / path-traversal sequences from a user-supplied
+// filename so it cannot escape the persona's S3 prefix (e.g. "../../other/key").
+const sanitizeFileName = (name) => {
+  const base = String(name || '').replace(/^.*[\\/]/, '').trim();
+  if (!base || base === '.' || base === '..' || base.includes('/') || base.includes('\\')) {
+    return `file-${Date.now()}`;
+  }
+  return base;
+};
+
 const PersonaDocumentUpload = ({ persona, onDocumentsChange }) => {
   const [files, setFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -55,9 +65,10 @@ const PersonaDocumentUpload = ({ persona, onDocumentsChange }) => {
       const uploadedDocs = [];
       await Promise.all(files.map(async (file) => {
         const fileContent = await file.arrayBuffer();
-        const key = `${persona.s3Prefix}${file.name}`;
+        const safeName = sanitizeFileName(file.name);
+        const key = `${persona.s3Prefix}${safeName}`;
         await client.send(new PutObjectCommand({ Bucket: bedrockConfig.personaS3Bucket, Key: key, Body: fileContent, ContentType: file.type || 'application/octet-stream' }));
-        uploadedDocs.push({ name: file.name, key, size: file.size, type: file.type, uploadedAt: Date.now() });
+        uploadedDocs.push({ name: safeName, key, size: file.size, type: file.type, uploadedAt: Date.now() });
       }));
       const updatedDocuments = [...documents, ...uploadedDocs];
       setDocuments(updatedDocuments);

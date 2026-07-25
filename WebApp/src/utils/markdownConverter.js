@@ -1,5 +1,6 @@
 import { marked } from 'marked';
 import html2pdf from 'html2pdf.js';
+import DOMPurify from 'dompurify';
 
 const PDF_STYLES = `
   body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; line-height: 1.6; color: #222; }
@@ -25,8 +26,12 @@ const PDF_STYLES = `
 
 export async function convertToPdf(markdown) {
   const html = marked.parse(markdown || '');
+  // Sanitize the rendered markdown before injecting into the DOM to prevent XSS.
+  // PDF_STYLES is a trusted, hardcoded constant so it is concatenated after sanitization.
+  const sanitizedHtml = DOMPurify.sanitize(html);
   const container = document.createElement('div');
-  container.innerHTML = `<style>${PDF_STYLES}</style>${html}`;
+  // nosemgrep: javascript.browser.security.insecure-innerhtml,javascript.browser.security.insecure-document-method -- marked output is sanitized with DOMPurify.sanitize(); PDF_STYLES is a trusted constant
+  container.innerHTML = `<style>${PDF_STYLES}</style>${sanitizedHtml}`;
   const options = {
     margin: [10, 10, 10, 10],
     filename: 'export.pdf',

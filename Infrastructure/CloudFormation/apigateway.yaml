@@ -143,22 +143,25 @@ Resources:
       PathPart: "chatbot"
       ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
 
-  ApiGatewayResource:
-    Type: "AWS::ApiGateway::Resource"
-    Properties:
-      RestApiId: !Ref ApiGatewayRestApi
-      PathPart: "{folder}"
-      ParentId: !Ref ChatbotResource
-
   ApiGatewayResource2:
     Type: "AWS::ApiGateway::Resource"
     Properties:
       RestApiId: !Ref ApiGatewayRestApi
       PathPart: "{item+}"
-      ParentId: !Ref ApiGatewayResource
+      ParentId: !Ref ChatbotResource
 
   ApiGatewayMethod:
     Type: "AWS::ApiGateway::Method"
+    Metadata:
+      # Accepted risk: this GET method is intentionally public (AuthorizationType: NONE).
+      # It serves the static React app from S3 and acts as a CloudFront replacement in
+      # GovCloud, where CloudFront is not available. The endpoint is fronted by the WAF
+      # WebACL (AWS managed rules + rate limiting) and the integration IAM role is scoped
+      # to read-only s3:GetObject on the single UI bucket, so CKV_AWS_59 is suppressed.
+      checkov:
+        skip:
+          - id: CKV_AWS_59
+            comment: "Accepted risk: public content-delivery endpoint replacing CloudFront in GovCloud; fronted by WAF and scoped to read-only S3 GetObject."
     Properties:
       RestApiId: !Ref ApiGatewayRestApi
       ResourceId: !Ref ApiGatewayResource2
@@ -167,7 +170,6 @@ Resources:
       AuthorizationType: "NONE"
       ApiKeyRequired: false
       RequestParameters: 
-        "method.request.path.folder": true
         "method.request.path.item": true
       MethodResponses: 
       - 
@@ -200,11 +202,10 @@ Resources:
           StatusCode: "500"
         PassthroughBehavior: "WHEN_NO_MATCH"
         RequestParameters: 
-          "integration.request.path.bucket": "method.request.path.folder"
           "integration.request.path.object": "method.request.path.item"
         TimeoutInMillis: 29000
         Type: "AWS"
-        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:s3:path/{bucket}/{object}"
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:s3:path/${UICodeS3Bucket}/{object}"
 
   ApiGatewayMethod2:
     Type: "AWS::ApiGateway::Method"
@@ -216,7 +217,6 @@ Resources:
       AuthorizationType: "NONE"
       ApiKeyRequired: false
       RequestParameters: 
-        "method.request.path.folder": true
         "method.request.path.item": true
       MethodResponses: 
       - 
@@ -254,6 +254,13 @@ Resources:
 
   ApiGatewayStage:
     Type: "AWS::ApiGateway::Stage"
+    Metadata:
+      # X-Ray tracing is an observability feature, not a security control, so it
+      # provides no security benefit for this API. CKV_AWS_73 is suppressed.
+      checkov:
+        skip:
+          - id: CKV_AWS_73
+            comment: "X-Ray tracing is an observability feature with no security benefit for this API; intentionally not enabled."
     Properties:
       RestApiId: !Ref ApiGatewayRestApi
       StageName: "v1"    # You can change this to your desired stage name
@@ -337,4 +344,4 @@ Outputs:
     Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/v1/chatbot"
   UserURL:
     Description: "API Gateway endpoint URL"
-    Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/v1/chatbot/${UICodeS3Bucket}/index.html"
+    Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/v1/chatbot/index.html"
