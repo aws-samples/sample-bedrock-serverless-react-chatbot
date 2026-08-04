@@ -71,16 +71,22 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns: 
         - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: SQSSendMessageToDLQ
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                Resource:
-                  - !Ref LambdaDLQArn
+        - !Ref PreSignUpRolePolicy
+
+  PreSignUpRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${AWS::StackName}-PreSignUpDLQAccess'
+      Description: 'Managed policy allowing the pre-signup Lambda to write to its dead letter queue'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: SQSSendMessageToDLQ
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource:
+              - !Ref LambdaDLQArn
 
   PreSignUpLambda:
     Type: AWS::Lambda::Function
@@ -90,7 +96,7 @@ Resources:
           AllowedDomain: !Ref AllowedEmailDomain
       Handler: index.lambda_handler
       Role: !GetAtt PreSignUpRole.Arn
-      Runtime: python3.11
+      Runtime: python3.13
       Timeout: 60
       ReservedConcurrentExecutions: 1
       KmsKeyArn: !Ref LambdaKMSKeyArn
@@ -213,9 +219,12 @@ Resources:
             - Sid: BedrockKnowledgeBaseRetrieve
               Effect: Allow
               Action:
+                # Retrieve is the retrieval path for managed knowledge bases, which do
+                # not support RetrieveAndGenerate. Scoped to this deployment's own
+                # knowledge base rather than every knowledge base in the account.
                 - bedrock:Retrieve
               Resource:
-                - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*'
+                - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KnowledgeBaseId}'
             - !Ref AWS::NoValue
           - Sid: BedrockModelInvoke
             Effect: Allow
@@ -253,6 +262,10 @@ Resources:
               Action:
                 - bedrock:CreateDataSource
                 - bedrock:UpdateDataSource
+                # GetDataSource lets the web app wait for a newly created data source to
+                # leave CREATING before it starts a sync. Managed knowledge bases create
+                # data sources asynchronously.
+                - bedrock:GetDataSource
               Resource:
                 - !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KnowledgeBaseId}/data-source/*'
             - !Ref AWS::NoValue
@@ -392,16 +405,18 @@ Resources:
           Value: UserPersonas
 
   DynamoDBAccessPolicy:
-    Type: AWS::IAM::Policy
+    Type: AWS::IAM::ManagedPolicy
     DependsOn: 
       - UserConversationHistory
       - UserPersonas
     Properties:
-      PolicyName: dynamodb-access-policy
+      ManagedPolicyName: !Sub '${AWS::StackName}-dynamodb-access-policy'
+      Description: 'Managed policy granting authenticated users access to their conversation history and persona tables'
       PolicyDocument:
         Version: 2012-10-17
         Statement:
-          - Effect: Allow
+          - Sid: DynamoDBItemAccess
+            Effect: Allow
             Action:
               - dynamodb:PutItem
               - dynamodb:GetItem

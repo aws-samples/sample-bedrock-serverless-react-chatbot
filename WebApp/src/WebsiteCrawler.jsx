@@ -13,8 +13,10 @@ import { addWebsiteToCrawl } from './bedrockAgent';
 import { sanitizeForLog } from './utils/sanitize';
 import { validateFilters } from './utils/regexValidator';
 import { enforceHttps } from './utils/urlValidator';
+import { bedrockConfig } from './aws-config';
 
 const WebsiteCrawler = () => {
+  const isManagedKb = bedrockConfig.vectorStore === 'managed';
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [inclusionFilters, setInclusionFilters] = useState('.*');
   const [exclusionFilters, setExclusionFilters] = useState('.*\\.pdf\n.*\\.zip\n.*\\.exe');
@@ -98,11 +100,20 @@ const WebsiteCrawler = () => {
         </div>
         <div className="space-y-2">
           <Label>Max Pages</Label>
+          {isManagedKb && (
+            <p className="text-xs text-muted-foreground">
+              Applied as the maximum links followed per URL (1-1000). A managed knowledge base has no total page cap.
+            </p>
+          )}
           <Input type="number" value={maxPages} onChange={(e) => setMaxPages(e.target.value)} disabled={loading} />
         </div>
         <div className="space-y-2">
           <Label>Rate Limit (optional)</Label>
-          <p className="text-xs text-muted-foreground">Maximum requests per second. Leave empty for default.</p>
+          <p className="text-xs text-muted-foreground">
+            {isManagedKb
+              ? 'Maximum URLs crawled per minute (1-300). Leave empty for default.'
+              : 'Maximum requests per second. Leave empty for default.'}
+          </p>
           <Input type="number" value={rateLimit} onChange={(e) => setRateLimit(e.target.value)} placeholder="Optional" disabled={loading} />
         </div>
         <Button type="submit" disabled={loading || !websiteUrl.trim() || !exclusionFilters.trim()}>

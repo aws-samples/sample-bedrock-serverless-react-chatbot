@@ -4,7 +4,8 @@ import {
   BedrockAgentRuntimeClient,
   InvokeAgentCommand,
   InvokeInlineAgentCommand,
-  RetrieveAndGenerateStreamCommand
+  RetrieveAndGenerateStreamCommand,
+  RetrieveCommand
 } from "@aws-sdk/client-bedrock-agent-runtime";
 import { 
   BedrockAgentClient,
@@ -16,12 +17,14 @@ import {
   PrepareAgentCommand,
   CreateAgentAliasCommand,
   UpdateDataSourceCommand,
-  CreateDataSourceCommand
+  CreateDataSourceCommand,
+  GetDataSourceCommand
 } from "@aws-sdk/client-bedrock-agent";
 import { BedrockClient, GetFoundationModelCommand, ListFoundationModelsCommand, ListInferenceProfilesCommand } from "@aws-sdk/client-bedrock";
 import { BedrockRuntimeClient, ConverseCommand, ConverseStreamCommand, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
-import { bedrockConfig, config, vpceEndpoints } from './aws-config';
+import { bedrockConfig, config, vpceEndpoints, isManagedKnowledgeBase } from './aws-config';
 import { sanitizeForLog } from './utils/sanitize';
+import { toCanonicalS3Uri } from './utils/s3Uri';
 
 /**
  * @typedef {Object} ResponseBody
@@ -222,12 +225,188 @@ export const invokeBedrockAgent = async (prompt, sessionId, credentials, onChunk
   }
 };
 
+// Maximum query characters accepted by a Retrieve request against a managed
+// knowledge base, per the managed knowledge base service quotas.
+const MANAGED_KB_MAX_QUERY_CHARS = 10000;
+
+// Chunks requested per query. The service default is 5, which is too little context
+// for good answers; a managed knowledge base reranks results before returning them,
+// so a moderate number here gives better grounding without bloating the prompt.
+const MANAGED_KB_NUMBER_OF_RESULTS = 20;
+
+// Managed knowledge bases report S3 locations as percent-encoded HTTPS URLs, while
+// customer-managed ones use s3://bucket/key. Normalizing here keeps citations in a
+// single canonical shape for display, presigning, and persisted conversation history.
+const normalizeRetrievedLocation = (location) => {
+  const uri = location?.s3Location?.uri;
+  if (!uri) return location;
+  return { ...location, s3Location: { ...location.s3Location, uri: toCanonicalS3Uri(uri) } };
+};
+
+const referenceUri = (location) =>
+  location?.s3Location?.uri ||
+  location?.webLocation?.url ||
+  location?.confluenceLocation?.url ||
+  location?.sharePointLocation?.url ||
+  location?.kendraDocumentLocation?.uri ||
+  location?.customDocumentLocation?.id;
+
+// Renders the app's knowledge base prompt template by substituting the retrieved
+// context and the user's question. $output_format_instructions$ is a
+// RetrieveAndGenerate-only placeholder, so it is stripped here (the repo's default
+// template also contains it without the closing '$', so both forms are handled).
+const renderKnowledgeBasePrompt = (template, searchResults, query) => {
+  const hasResultsPlaceholder = template.includes('$search_results$');
+  let rendered = template
+    .split('$search_results$').join(searchResults)
+    .split('$query$').join(query)
+    .split('$output_format_instructions$').join('')
+    .split('$output_format_instructions').join('')
+    .trim();
+
+  // If a custom template omits the placeholders, still supply the context.
+  if (!hasResultsPlaceholder) {
+    rendered = `${rendered}\n\nContext from the knowledge base:\n${searchResults}\n\nQuestion: ${query}`;
+  }
+  return rendered;
+};
+
+/**
+ * RAG for an Amazon Bedrock Managed Knowledge Base.
+ *
+ * Managed knowledge bases do not support RetrieveAndGenerate or
+ * RetrieveAndGenerateStream ("This operation is not supported for managed knowledge
+ * bases"); the supported retrieval operations are Retrieve and AgenticRetrieveStream.
+ * This performs the retrieve step against the knowledge base and then runs generation
+ * client-side through ConverseStream, which keeps the app's model selection, persona
+ * system prompt, conversation history, guardrail config, file attachments, streaming,
+ * and token accounting working exactly as they do for the other vector stores.
+ *
+ * Citations are built from the retrieval results. Because generation happens here
+ * rather than inside Bedrock, there is no span-level attribution, so the citation bar
+ * lists source documents without inline highlight spans.
+ */
+const invokeManagedKbRetrieveAndGenerateStream = async (prompt, files, sessionId, credentials, modelId, conversationHistory, onChunk, systemPrompt) => {
+  const agentRuntimeClient = new BedrockAgentRuntimeClient({
+    region: bedrockConfig.region,
+    credentials: credentials,
+    ...(vpceEndpoints.bedrockAgentRuntime && { endpoint: vpceEndpoints.bedrockAgentRuntime })
+  });
+
+  let queryText = prompt;
+  if (files && files.length > 0) {
+    queryText = `${prompt}\n\nReference files: ${files.map(file => file.name).join(', ')}`;
+  }
+  const retrievalQueryText = queryText.slice(0, MANAGED_KB_MAX_QUERY_CHARS);
+
+  if (config.debug) {
+    console.log('=== MANAGED KB RETRIEVE ===');
+    console.log('Knowledge base:', sanitizeForLog(bedrockConfig.knowledgeBaseId));
+  }
+
+  // Managed knowledge bases take managedSearchConfiguration; vectorSearchConfiguration
+  // is rejected with "not supported for managed knowledge bases". Without an explicit
+  // numberOfResults the service returns only 5 chunks, which is thin context for RAG.
+  const retrieveResponse = await agentRuntimeClient.send(new RetrieveCommand({
+    knowledgeBaseId: bedrockConfig.knowledgeBaseId,
+    retrievalQuery: { text: retrievalQueryText },
+    retrievalConfiguration: {
+      managedSearchConfiguration: { numberOfResults: MANAGED_KB_NUMBER_OF_RESULTS }
+    }
+  }));
+
+  const results = retrieveResponse.retrievalResults || [];
+
+  if (config.debug) {
+    console.log(`Retrieved ${results.length} result(s)`);
+  }
+
+  const searchResults = results.length
+    ? results
+        .map((result, index) => {
+          const uri = referenceUri(result.location);
+          let label = `Source ${index + 1}`;
+          if (uri) {
+            try {
+              label = decodeURIComponent(uri).split('/').pop() || uri;
+            } catch {
+              label = uri.split('/').pop() || uri;
+            }
+          }
+          return `[${index + 1}] ${label}\n${result.content?.text ?? ''}`;
+        })
+        .join('\n\n')
+    : 'No relevant information was found in the knowledge base.';
+
+  const basePromptTemplate = bedrockConfig.defaultPrompt || `You are a helpful assistant. Use the following context from the knowledge base to answer the question.
+
+$search_results$
+
+Question: $query$
+
+Instructions:
+- Answer the question based on the context provided above
+- If the information needed to answer the question is not found in the context, respond with: "Sorry, I don't have information in my knowledge base to answer that question."
+- Be accurate and provide as much supporting information as possible in your responses`;
+
+  const generationPrompt = renderKnowledgeBasePrompt(basePromptTemplate, searchResults, queryText);
+
+  // Generation reuses the existing ConverseStream path so guardrails, file handling,
+  // usage metrics, and chunk streaming behave identically to general chat.
+  const converseResult = await invokeBedrockConverseStreamCommand(
+    generationPrompt,
+    files,
+    credentials,
+    modelId,
+    conversationHistory,
+    onChunk,
+    systemPrompt
+  );
+
+  const citations = results.length
+    ? [{
+        retrievedReferences: results.map(result => ({
+          content: result.content,
+          location: normalizeRetrievedLocation(result.location),
+          metadata: result.metadata
+        }))
+      }]
+    : [];
+
+  return {
+    body: converseResult.body,
+    conversationHistory: converseResult.conversationHistory,
+    citations,
+    // Retrieve is stateless, so the caller's existing RAG session id is preserved.
+    sessionId,
+    usage: converseResult.usage,
+    // Shaped so the caller's existing token-usage extraction keeps working.
+    fullResponse: {
+      metrics: {
+        inputTokenCount: converseResult.usage?.inputTokens || 0,
+        outputTokenCount: converseResult.usage?.outputTokens || 0
+      }
+    }
+  };
+};
+
 export const invokeBedrockRetrieveAndGenerateStreamCommand = async (prompt, files, sessionId, credentials, modelId, conversationHistory = [], onChunk, systemPrompt = null) => {
   if (!credentials) {
     throw new Error('Credentials not provided');
   }
 
   if (config.debug) console.log('Model ID:', sanitizeForLog(modelId))
+
+  // Managed knowledge bases reject RetrieveAndGenerateStream, so they take the
+  // Retrieve + client-side generation path instead.
+  if (isManagedKnowledgeBase()) {
+    try {
+      return await invokeManagedKbRetrieveAndGenerateStream(prompt, files, sessionId, credentials, modelId, conversationHistory, onChunk, systemPrompt);
+    } catch (error) {
+      console.error('Error invoking Bedrock:', error);
+      throw error;
+    }
+  }
   const bedrockClient = new BedrockAgentRuntimeClient({
     region: bedrockConfig.region,
     credentials: credentials,
@@ -758,64 +937,162 @@ export const invokeBedrock = async (prompt, sessionId, credentials, modelId) => 
   }
 };
       
+// An Amazon Bedrock Managed Knowledge Base owns its vector store and uses the
+// connector-based data source API (MANAGED_KNOWLEDGE_BASE_CONNECTOR) instead of the
+// self-managed per-source shapes such as webConfiguration. The AWS documentation is
+// currently inconsistent about the web connector's type discriminator: the "Connect a
+// data source" page lists WEB_CRAWLER while the Web Crawler connector page says to use
+// WEB. Both are attempted, in documented-for-this-connector order, so the feature keeps
+// working whichever value the API accepts.
+const MANAGED_WEB_CONNECTOR_TYPES = ["WEB", "WEB_CRAWLER"];
+
+// Self-managed crawl scopes map onto the managed connector's syncScope values.
+const MANAGED_SYNC_SCOPE_BY_SCOPE = {
+  HOST_ONLY: "DOMAINS_ONLY",
+  SUBDOMAINS: "SUB_DOMAINS"
+};
+
+const waitForDataSourceAvailable = async (client, dataSourceId, { attempts = 60, intervalMs = 5000 } = {}) => {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const { dataSource } = await client.send(new GetDataSourceCommand({
+      knowledgeBaseId: bedrockConfig.knowledgeBaseId,
+      dataSourceId
+    }));
+
+    if (dataSource?.status === "AVAILABLE") {
+      return;
+    }
+    if (dataSource?.status === "CREATE_FAILED") {
+      throw new Error(`Data source creation failed: ${dataSource.failureReasons?.join("; ") || "no reason provided"}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error("Data source did not become available in time. The crawl can be started later from the knowledge base sync action.");
+};
+
+const buildSelfManagedWebConfiguration = (websiteUrl, inclusionFilters, exclusionFilters, scope, rateLimit, maxPages) => ({
+  type: "WEB",
+  webConfiguration: {
+    sourceConfiguration: {
+      urlConfiguration: {
+        seedUrls: [
+          { url: websiteUrl }
+        ]
+      }
+    },
+    crawlerConfiguration: {
+      crawlerLimits: {
+        rateLimit: rateLimit || undefined,
+        maxPages: maxPages || 100
+      },
+      inclusionFilters: inclusionFilters || [".*"],
+      exclusionFilters: exclusionFilters || [".*\\.pdf"], // Default exclusion filter
+      scope: scope || "SUBDOMAINS"
+    }
+  }
+});
+
+const buildManagedWebConfiguration = (connectorType, websiteUrl, inclusionFilters, exclusionFilters, scope, rateLimit, maxPages) => {
+  const crawlConfiguration = {
+    syncScope: MANAGED_SYNC_SCOPE_BY_SCOPE[scope] || MANAGED_SYNC_SCOPE_BY_SCOPE.SUBDOMAINS
+  };
+
+  // The managed connector has no total-pages cap, so the closest equivalent to the
+  // self-managed maxPages limit is the per-URL link limit (valid range 1-1000).
+  if (maxPages) {
+    crawlConfiguration.maxLinksPerUrl = Math.min(Math.max(Number(maxPages), 1), 1000);
+  }
+  // Managed rate limiting is expressed per minute (valid range 1-300).
+  if (rateLimit) {
+    crawlConfiguration.maxCrawledUrlsPerMinute = Math.min(Math.max(Number(rateLimit), 1), 300);
+  }
+
+  return {
+    type: "MANAGED_KNOWLEDGE_BASE_CONNECTOR",
+    managedKnowledgeBaseConnectorConfiguration: {
+      connectorParameters: {
+        type: connectorType,
+        version: "1",
+        connectionConfiguration: {
+          seedUrls: [websiteUrl],
+          authType: "NO_AUTH"
+        },
+        crawlConfiguration,
+        filterConfiguration: {
+          inclusionPatterns: inclusionFilters?.length ? inclusionFilters : [".*"],
+          exclusionPatterns: exclusionFilters?.length ? exclusionFilters : [".*\\.pdf"]
+        }
+      }
+    }
+  };
+};
+
 export const addWebsiteToCrawl = async (websiteUrl, inclusionFilters, exclusionFilters, scope, rateLimit, maxPages, credentials) => {
   const client = new BedrockAgentClient({
     region: bedrockConfig.region,
     credentials: credentials,
     ...(vpceEndpoints.bedrockAgent && { endpoint: vpceEndpoints.bedrockAgent })
   });
-  
-  // Create a data source configuration for web crawling
-  const dataSourceConfiguration = {
-    type: "WEB",
-    webConfiguration: {
-      sourceConfiguration: {
-        urlConfiguration: {
-          seedUrls: [
-            { url: websiteUrl }
-          ]
-        }
-      },
-      crawlerConfiguration: {
-        crawlerLimits: {
-          rateLimit: rateLimit || undefined,
-          maxPages: maxPages || 100
-        },
-        inclusionFilters: inclusionFilters || [".*"],
-        exclusionFilters: exclusionFilters || [".*\\.pdf"], // Default exclusion filter
-        scope: scope || "SUBDOMAINS"
-      }
-    }
-  };
-  
+
   // Create a sanitized name from the website URL that matches the required pattern ([0-9a-zA-Z][_-]?){1,100}
   const sanitizedName = websiteUrl
     .replace(/^https?:\/\//, '')
     .replace(/[^a-zA-Z0-9]/g, '')
     .substring(0, 90);
-    
-  // Create a new data source with the website configuration
-  const input = {
-    knowledgeBaseId: bedrockConfig.knowledgeBaseId,
-    name: `Web${sanitizedName}`,
-    dataSourceConfiguration: dataSourceConfiguration
-  };
-  
+
+  // A managed knowledge base needs the connector shape; every other vector store
+  // (OpenSearch Serverless, S3 Vectors) uses the self-managed web configuration.
+  const candidateConfigurations = isManagedKnowledgeBase()
+    ? MANAGED_WEB_CONNECTOR_TYPES.map((connectorType) =>
+        buildManagedWebConfiguration(connectorType, websiteUrl, inclusionFilters, exclusionFilters, scope, rateLimit, maxPages))
+    : [buildSelfManagedWebConfiguration(websiteUrl, inclusionFilters, exclusionFilters, scope, rateLimit, maxPages)];
+
+  let dataSource;
+  let lastError;
+
+  for (const dataSourceConfiguration of candidateConfigurations) {
+    try {
+      const createResponse = await client.send(new CreateDataSourceCommand({
+        knowledgeBaseId: bedrockConfig.knowledgeBaseId,
+        name: `Web${sanitizedName}`,
+        dataSourceConfiguration
+      }));
+      dataSource = createResponse.dataSource;
+      break;
+    } catch (e) {
+      lastError = e;
+      // Only fall through to the next candidate connector type when the API rejected
+      // the request as invalid. Anything else (access denied, throttling, conflict)
+      // will not be fixed by changing the discriminator.
+      if (e.name !== "ValidationException") {
+        break;
+      }
+    }
+  }
+
+  if (!dataSource) {
+    console.error("Error adding website to crawl:", sanitizeForLog(lastError?.message ?? "unknown error"));
+    throw lastError;
+  }
+
   try {
-    // Create the data source
-    const createCommand = new CreateDataSourceCommand(input);
-    const createResponse = await client.send(createCommand);
-    
+    // CreateDataSource is asynchronous for managed knowledge bases: the data source
+    // reports CREATING for a while and StartIngestionJob is rejected until it reaches
+    // AVAILABLE. Self-managed data sources are usable immediately.
+    if (isManagedKnowledgeBase()) {
+      await waitForDataSourceAvailable(client, dataSource.dataSourceId);
+    }
+
     // Start an ingestion job to crawl the website
-    const ingestionInput = {
+    const ingestionResponse = await client.send(new StartIngestionJobCommand({
       knowledgeBaseId: bedrockConfig.knowledgeBaseId,
-      dataSourceId: createResponse.dataSource.dataSourceId
-    };
-    const ingestionCommand = new StartIngestionJobCommand(ingestionInput);
-    const ingestionResponse = await client.send(ingestionCommand);
-    
+      dataSourceId: dataSource.dataSourceId
+    }));
+
     return {
-      dataSourceId: createResponse.dataSource.dataSourceId,
+      dataSourceId: dataSource.dataSourceId,
       ingestionJobId: ingestionResponse.ingestionJob.ingestionJobId,
       status: "Website added to crawl queue and ingestion started"
     };

@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT-0
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Bedrock Stack - Bedrock Agent, Knowledge Base, and vector store (OpenSearch Serverless or Amazon S3 Vectors)
+Description: Bedrock Stack - Bedrock Agent, Knowledge Base, and vector store (OpenSearch Serverless, Amazon S3 Vectors, or Bedrock-managed)
 
 Rules:
   # Amazon S3 Vectors for Bedrock Knowledge Bases is not yet available in
@@ -21,7 +21,49 @@ Rules:
           partition. Set VectorStore to "opensearch" (Amazon OpenSearch Serverless)
           when deploying to us-gov-west-1 or us-gov-east-1.
 
+  # Amazon Bedrock Managed Knowledge Bases are only available in a subset of
+  # Regions. Fail fast at create/validate time rather than rolling back the whole
+  # stack on the KnowledgeBase resource. Update this list as AWS expands Regional
+  # availability (see "Supported AWS Regions" in the Bedrock User Guide).
+  ManagedKbSupportedRegions:
+    RuleCondition: !Equals [!Ref VectorStore, "managed"]
+    Assertions:
+      - Assert: !Contains
+          - - "us-east-1"
+            - "us-west-2"
+            - "eu-west-1"
+            - "eu-west-2"
+            - "eu-central-1"
+            - "ap-northeast-1"
+            - "ap-southeast-2"
+            - "us-gov-west-1"
+          - !Ref "AWS::Region"
+        AssertDescription: >-
+          VectorStore "managed" (Amazon Bedrock Managed Knowledge Base) is not
+          available in this Region. Supported Regions are us-east-1, us-west-2,
+          eu-west-1, eu-west-2, eu-central-1, ap-northeast-1, ap-southeast-2, and
+          us-gov-west-1. Use VectorStore "opensearch" or "s3vectors" instead.
+
+  # In GovCloud, Bedrock Managed Knowledge Bases do not offer the service-managed
+  # embedding model, so a customer-supplied Bedrock embedding model is required.
+  ManagedKbGovCloudRequiresCustomEmbedding:
+    RuleCondition: !And
+      - !Equals [!Ref VectorStore, "managed"]
+      - !Contains
+        - ["us-gov-west-1", "us-gov-east-1"]
+        - !Ref "AWS::Region"
+    Assertions:
+      - Assert: !Not [!Equals [!Ref ManagedKbEmbeddingModelType, "MANAGED"]]
+        AssertDescription: >-
+          ManagedKbEmbeddingModelType "MANAGED" is not supported in GovCloud.
+          Service-managed embedding models for Bedrock Managed Knowledge Bases are
+          not available in the aws-us-gov partition. Use "CUSTOM" (or leave the
+          default "AUTO", which selects CUSTOM automatically in GovCloud).
+
 Conditions:
+  # True in the AWS GovCloud (US) partition. Fn::Contains is only valid inside the
+  # Rules section, so partition matching is used here instead of a Region list.
+  IsGovCloud: !Equals [!Ref "AWS::Partition", "aws-us-gov"]
   HasGuardrailId: !Not [!Equals [!Ref GuardrailId, '']]
   CreateRAGResources: !Equals [!Ref SkipRag, "false"]
   SkipRAGResources: !Not [!Equals [!Ref SkipRag, "false"]]
@@ -33,6 +75,27 @@ Conditions:
   UseS3Vectors: !And
     - !Equals [!Ref SkipRag, "false"]
     - !Equals [!Ref VectorStore, "s3vectors"]
+  # RAG enabled AND a Bedrock Managed Knowledge Base selected. Bedrock owns the
+  # vector store entirely, so no vector store resources are created in this stack.
+  UseManagedKb: !And
+    - !Equals [!Ref SkipRag, "false"]
+    - !Equals [!Ref VectorStore, "managed"]
+  # Managed KB using a customer-supplied embedding model rather than the
+  # service-managed one. "AUTO" resolves to CUSTOM in GovCloud (where the
+  # service-managed embedding model is unavailable) and MANAGED elsewhere.
+  UseManagedKbCustomEmbedding: !And
+    - !Condition UseManagedKb
+    - !Or
+      - !Equals [!Ref ManagedKbEmbeddingModelType, "CUSTOM"]
+      - !And
+        - !Equals [!Ref ManagedKbEmbeddingModelType, "AUTO"]
+        - !Condition IsGovCloud
+  # Any vector store the customer provisions and must grant the Knowledge Base
+  # role access to. Excludes the Bedrock-managed store, which needs no such grant.
+  UseSelfManagedVectorStore: !Or
+    - !Condition UseOpenSearch
+    - !Condition UseS3Vectors
+  HasManagedKbEmbeddingModelArn: !Not [!Equals [!Ref ManagedKbEmbeddingModelArn, ""]]
 
 Parameters:
   SkipRag:
@@ -49,10 +112,35 @@ Parameters:
     AllowedValues:
       - "opensearch"
       - "s3vectors"
+      - "managed"
     Description: >-
       Vector store backend for RAG. "opensearch" uses Amazon OpenSearch Serverless.
-      "s3vectors" uses Amazon S3 Vectors (lower cost, fully managed vector storage).
-      Ignored when SkipRag is "true".
+      "s3vectors" uses Amazon S3 Vectors (lower cost, customer-owned vector bucket
+      and index). "managed" uses an Amazon Bedrock Managed Knowledge Base, where
+      Bedrock owns and scales the vector store, indexing, and retrieval - no vector
+      store resources are created in this account. Ignored when SkipRag is "true".
+
+  ManagedKbEmbeddingModelType:
+    Type: String
+    Default: "AUTO"
+    AllowedValues:
+      - "AUTO"
+      - "MANAGED"
+      - "CUSTOM"
+    Description: >-
+      Embedding model for the Bedrock Managed Knowledge Base. "MANAGED" uses the
+      service-managed embedding model (no model access required, enables the managed
+      reranker). "CUSTOM" uses ManagedKbEmbeddingModelArn. "AUTO" selects MANAGED in
+      commercial Regions and CUSTOM in GovCloud, where service-managed embedding is
+      unavailable. Only used when VectorStore is "managed".
+
+  ManagedKbEmbeddingModelArn:
+    Type: String
+    Default: ""
+    Description: >-
+      Bedrock embedding model ARN used when the Managed Knowledge Base embedding type
+      resolves to CUSTOM. Leave empty to default to amazon.titan-embed-text-v2:0 in
+      this Region. Must be a model supporting 1024 dimensions and FLOAT32.
 
   # Foundation Stack Outputs
   DynamoDBKMSKeyId:
@@ -268,6 +356,36 @@ Resources:
               - bedrock:CreateKnowledgeBase
             Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*
 
+          # Embedding Model Access. CreateKnowledgeBase assumes this role and
+          # verifies it can invoke the embedding model before the knowledge base is
+          # created, so the grant must live on the role's initial policy. Granting it
+          # only in a policy that references the knowledge base ID (which therefore
+          # cannot be created until after the knowledge base exists) fails with
+          # "Unable to verify the specified embedding model".
+          #
+          # A managed knowledge base using the service-managed embedding model needs
+          # no Bedrock model access, so the statement is omitted entirely in that case.
+          - !If
+            - UseManagedKb
+            - !If
+              - UseManagedKbCustomEmbedding
+              - Sid: BedrockEmbeddingModelInvoke
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  - !If
+                    - HasManagedKbEmbeddingModelArn
+                    - !Ref ManagedKbEmbeddingModelArn
+                    - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+              - !Ref AWS::NoValue
+            - Sid: BedrockEmbeddingModelInvoke
+              Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+
   OSSSecPolicyNetwork:
     Type: AWS::OpenSearchServerless::SecurityPolicy
     Condition: UseOpenSearch
@@ -340,15 +458,17 @@ Resources:
       Type: VECTORSEARCH
 
   OSSCollectionLambdaAccess:
-    Type: AWS::IAM::Policy
+    Type: AWS::IAM::ManagedPolicy
     Condition: UseOpenSearch
     DependsOn: OSSCollection
     Properties:
-      PolicyName: OSSCollectionAccess
+      ManagedPolicyName: !Sub 'OSSCollectionLambdaAccess-${AWS::StackName}'
+      Description: 'Managed policy granting the index-creator Lambda data access to the OpenSearch Serverless collection'
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
+          - Sid: OpenSearchServerlessAPIAccess
+            Effect: Allow
             Action:
               - aoss:APIAccessAll
             Resource: 
@@ -357,15 +477,17 @@ Resources:
         - !Ref LambdaServiceRole
 
   BedrockKnowledgeBaseOSSAccess:
-    Type: AWS::IAM::Policy
+    Type: AWS::IAM::ManagedPolicy
     Condition: UseOpenSearch
     DependsOn: OSSCollection
     Properties:
-      PolicyName: BedrockKnowledgeBaseOSSAccess
+      ManagedPolicyName: !Sub 'BedrockKnowledgeBaseOSSAccess-${AWS::StackName}'
+      Description: 'Managed policy granting the Bedrock Knowledge Base role data access to the OpenSearch Serverless collection'
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
+          - Sid: OpenSearchServerlessAPIAccess
+            Effect: Allow
             Action:
               - aoss:APIAccessAll
             Resource: 
@@ -593,10 +715,11 @@ Resources:
   # index. This must exist before the KB is created because Bedrock validates
   # index access during CreateKnowledgeBase.
   BedrockKnowledgeBaseS3VectorsAccess:
-    Type: AWS::IAM::Policy
+    Type: AWS::IAM::ManagedPolicy
     Condition: UseS3Vectors
     Properties:
-      PolicyName: BedrockKnowledgeBaseS3VectorsAccess
+      ManagedPolicyName: !Sub 'BedrockKnowledgeBaseS3VectorsAccess-${AWS::StackName}'
+      Description: 'Managed policy granting the Bedrock Knowledge Base role read/write access to the S3 vector index'
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -612,12 +735,6 @@ Resources:
             Resource:
               - !GetAtt S3VectorBucket.VectorBucketArn
               - !GetAtt S3VectorIndex.IndexArn
-          - Sid: BedrockEmbeddingModelInvoke
-            Effect: Allow
-            Action:
-              - bedrock:InvokeModel
-            Resource:
-              - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
       Roles:
         - !Ref BedrockKnowledgeBaseRole
 
@@ -644,16 +761,88 @@ Resources:
         S3VectorsConfiguration:
           IndexArn: !GetAtt S3VectorIndex.IndexArn
 
+  # ==========================================================================
+  # Amazon Bedrock Managed Knowledge Base (only when VectorStore=managed)
+  # ==========================================================================
+  # Bedrock owns the vector store, indexing, and retrieval infrastructure, so this
+  # stack creates no vector store resources and the Knowledge Base role needs no
+  # vector store permissions at all. StorageConfiguration is deliberately omitted:
+  # it is invalid for a MANAGED knowledge base.
+  #
+  # Data at rest is encrypted with the Foundation stack's customer managed Bedrock
+  # KMS key. Bedrock creates a KMS grant on that key at knowledge base creation and
+  # retires it on deletion, so the *deploying* principal needs kms:CreateGrant on
+  # the key. The Knowledge Base service role itself needs no permissions on it.
+  BedrockManagedKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    Condition: UseManagedKb
+    Properties:
+      Name: !Ref KnowledgeBaseName
+      Description: !Ref KnowledgeBaseDescription
+      RoleArn: !GetAtt BedrockKnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: "MANAGED"
+        ManagedKnowledgeBaseConfiguration:
+          EmbeddingModelType: !If [UseManagedKbCustomEmbedding, "CUSTOM", "MANAGED"]
+          # Only set for CUSTOM: the service-managed embedding model takes no
+          # model ARN or dimension/data-type configuration.
+          EmbeddingModelArn: !If
+            - UseManagedKbCustomEmbedding
+            - !If
+              - HasManagedKbEmbeddingModelArn
+              - !Ref ManagedKbEmbeddingModelArn
+              - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+            - !Ref AWS::NoValue
+          EmbeddingModelConfiguration: !If
+            - UseManagedKbCustomEmbedding
+            - BedrockEmbeddingModelConfiguration:
+                Dimensions: 1024
+                EmbeddingDataType: FLOAT32
+            - !Ref AWS::NoValue
+          ServerSideEncryptionConfiguration:
+            KmsKeyArn: !Ref BedrockKMSKeyArn
+
+  # Managed knowledge bases use the connector-based data source shape
+  # (MANAGED_KNOWLEDGE_BASE_CONNECTOR) rather than the self-managed S3Configuration.
+  # Note: CreateDataSource is asynchronous for managed knowledge bases - the data
+  # source transitions CREATING -> AVAILABLE before it can be synced.
+  BedrockManagedDataSource:
+    Type: AWS::Bedrock::DataSource
+    Condition: UseManagedKb
+    DependsOn:
+      - BedrockKnowledgeBaseSpecificAccess
+    Properties:
+      Name: MyKnowledgebaseDataSource
+      KnowledgeBaseId: !Ref BedrockManagedKnowledgeBase
+      DataSourceConfiguration:
+        Type: MANAGED_KNOWLEDGE_BASE_CONNECTOR
+        ManagedKnowledgeBaseConnectorConfiguration:
+          # ConnectorParameters is a passthrough JSON document, so its keys use the
+          # Bedrock API's camelCase naming rather than CloudFormation PascalCase.
+          ConnectorParameters:
+            type: S3
+            version: "1"
+            connectionConfiguration:
+              bucketName: !Ref KnowledgeBaseS3BucketName
+              bucketOwnerAccountId: !Ref AWS::AccountId
+          # Left DISABLED so a sync always mirrors the current contents of the
+          # bucket. Enabling it makes a sync skip its delete phase whenever a sync
+          # would remove more than the threshold percentage of indexed documents.
+          DeletionProtectionConfiguration:
+            DeletionProtectionStatus: DISABLED
+
   BedrockKnowledgeBaseSpecificAccess:
-    Type: AWS::IAM::Policy
+    Type: AWS::IAM::ManagedPolicy
     Condition: CreateRAGResources
     Properties:
-      PolicyName: BedrockKnowledgeBaseSpecificAccess
+      ManagedPolicyName: !Sub 'BedrockKnowledgeBaseSpecificAccess-${AWS::StackName}'
+      Description: 'Managed policy granting the Bedrock Knowledge Base role operations on its own knowledge base'
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
           # Bedrock Knowledge Base Operations
-          - Effect: Allow
+          - Sid: BedrockKnowledgeBaseOperations
+            Effect: Allow
             Action:
               - bedrock:DeleteKnowledgeBase
               - bedrock:GetKnowledgeBase
@@ -669,19 +858,21 @@ Resources:
               - bedrock:StopIngestionJob
             Resource: !Sub
               - arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KbId}
-              - KbId: !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
-          # Embedding Model Access
-          - Effect: Allow
-            Action:
-              - bedrock:InvokeModel
-            Resource:
-              - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
-      Roles: 
+              - KbId: !If
+                  - UseManagedKb
+                  - !Ref BedrockManagedKnowledgeBase
+                  - !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
+          # Note: embedding model access (bedrock:InvokeModel) is granted in
+          # BedrockKnowledgeBaseRolePolicy, not here. This policy cannot carry it
+          # because it references the knowledge base ID and is therefore created
+          # after the knowledge base, while CreateKnowledgeBase validates embedding
+          # model access up front.
+      Roles:
         - !Ref BedrockKnowledgeBaseRole
 
   BedrockDataSource:
     Type: AWS::Bedrock::DataSource
-    Condition: CreateRAGResources
+    Condition: UseSelfManagedVectorStore
     DependsOn: 
       - BedrockKnowledgeBaseSpecificAccess
     Properties:
@@ -723,7 +914,10 @@ Resources:
                 - bedrock:RetrieveAndGenerate
               Resource: !Sub
                 - 'arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KbId}'
-                - KbId: !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
+                - KbId: !If
+                    - UseManagedKb
+                    - !Ref BedrockManagedKnowledgeBase
+                    - !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
             - !Ref AWS::NoValue
           - Sid: S3PersonaBucketAccess
             Effect: Allow
@@ -827,7 +1021,10 @@ Resources:
         - !Ref AWS::NoValue
       KnowledgeBases: !If
         - CreateRAGResources
-        - - KnowledgeBaseId: !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
+        - - KnowledgeBaseId: !If
+              - UseManagedKb
+              - !Ref BedrockManagedKnowledgeBase
+              - !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
             Description: "Use this knowledge base to answer questions about our documentation and internal processes."
             KnowledgeBaseState: ENABLED
         - !Ref AWS::NoValue
@@ -843,22 +1040,27 @@ Resources:
                 MaximumLength: 2048
 
   BedrockAgentSpecificAccess:
-      Type: AWS::IAM::Policy
+      Type: AWS::IAM::ManagedPolicy
       DependsOn: BedrockAgent
       Properties:
-        PolicyName: BedrockAgentSpecificAccess
+        ManagedPolicyName: !Sub 'BedrockAgentSpecificAccess-${AWS::StackName}'
+        Description: 'Managed policy granting the Bedrock Agent role access to its own agent and knowledge base'
         PolicyDocument:
           Version: '2012-10-17'
           Statement:
             - !If
               - CreateRAGResources
-              - Effect: Allow
+              - Sid: BedrockKnowledgeBaseRetrieve
+                Effect: Allow
                 Action:
                   - bedrock:Retrieve
                   - bedrock:RetrieveAndGenerate
                 Resource: !Sub
                   - arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/${KbId}
-                  - KbId: !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
+                  - KbId: !If
+                      - UseManagedKb
+                      - !Ref BedrockManagedKnowledgeBase
+                      - !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
               - !Ref AWS::NoValue
             # Agent specific permissions
             - Effect: Allow
@@ -908,11 +1110,18 @@ Outputs:
     Description: ID of the Bedrock Knowledge Base
     Value: !If
       - CreateRAGResources
-      - !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
+      - !If
+        - UseManagedKb
+        - !Ref BedrockManagedKnowledgeBase
+        - !If [UseS3Vectors, !Ref BedrockKnowledgeBaseS3Vectors, !Ref BedrockKnowledgeBase]
       - "NONE"
   VectorStoreType:
-    Description: Vector store backend used for RAG (opensearch, s3vectors, or none)
+    Description: Vector store backend used for RAG (opensearch, s3vectors, managed, or none)
     Value: !If [CreateRAGResources, !Ref VectorStore, "none"]
+  ManagedKbEmbeddingModelTypeUsed:
+    Condition: UseManagedKb
+    Description: Embedding model type resolved for the Bedrock Managed Knowledge Base
+    Value: !If [UseManagedKbCustomEmbedding, "CUSTOM", "MANAGED"]
   S3VectorBucketArn:
     Condition: UseS3Vectors
     Description: ARN of the S3 vector bucket used for RAG
@@ -923,7 +1132,13 @@ Outputs:
     Value: !GetAtt S3VectorIndex.IndexArn
   BedrockDataSourceId:
     Description: ID of the Bedrock Data Source
-    Value: !If [CreateRAGResources, !GetAtt BedrockDataSource.DataSourceId, "NONE"]
+    Value: !If
+      - CreateRAGResources
+      - !If
+        - UseManagedKb
+        - !GetAtt BedrockManagedDataSource.DataSourceId
+        - !GetAtt BedrockDataSource.DataSourceId
+      - "NONE"
   LambdaFunctionName:
     Condition: UseOpenSearch
     Description: Name of the Index Creator Lambda function
@@ -938,5 +1153,5 @@ Outputs:
     Value: !Ref LambdaServiceRole
   LambdaPolicyArn:
     Condition: UseOpenSearch
-    Description: ARN of the custom Lambda policy
-    Value: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${LambdaServiceRole}/LambdaS3AndAOSSAccess"
+    Description: ARN of the customer managed policy attached to the Lambda service role
+    Value: !Ref LambdaServiceRolePolicy

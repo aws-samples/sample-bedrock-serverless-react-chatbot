@@ -55,6 +55,16 @@ export const vpceEndpoints = new Proxy({}, {
   }
 });
 
+/**
+ * True when this deployment's knowledge base is an Amazon Bedrock Managed Knowledge
+ * Base. Managed knowledge bases differ from customer-managed ones at query time:
+ * they reject RetrieveAndGenerate/RetrieveAndGenerateStream entirely, and Retrieve
+ * takes managedSearchConfiguration rather than vectorSearchConfiguration.
+ *
+ * Lives here so callers can branch without pulling in the Bedrock SDK.
+ */
+export const isManagedKnowledgeBase = () => bedrockConfig.vectorStore === 'managed';
+
 export const config = {
   debug: false
 }

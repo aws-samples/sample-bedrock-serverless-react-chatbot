@@ -243,25 +243,28 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
-      Policies:
-        - PolicyName: KMSKeyPolicyUpdate
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - kms:GetKeyPolicy
-                  - kms:PutKeyPolicy
-                Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/${S3KMSKeyId}'
-        - PolicyName: SQSSendMessageToDLQ
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                Resource:
-                  - !Ref LambdaDLQArn
+        - !Ref KMSKeyPolicyUpdatePolicy
+
+  KMSKeyPolicyUpdatePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${AWS::StackName}-KMSKeyPolicyUpdate'
+      Description: 'Managed policy allowing the KMS policy updater Lambda to read/write the S3 key policy and write to its DLQ'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: KMSKeyPolicyReadWrite
+            Effect: Allow
+            Action:
+              - kms:GetKeyPolicy
+              - kms:PutKeyPolicy
+            Resource: !Sub 'arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/${S3KMSKeyId}'
+          - Sid: SQSSendMessageToDLQ
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Resource:
+              - !Ref LambdaDLQArn
 
   KMSKeyPolicyUpdateFunction:
     Type: AWS::Lambda::Function
