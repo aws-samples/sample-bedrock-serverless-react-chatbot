@@ -3,10 +3,14 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { CredentialsContext } from './SessionContext';
-import { bedrockConfig } from './aws-config';
+import { bedrockConfig, isManagedKnowledgeBase } from './aws-config';
+import { sanitizeForLog } from './utils/sanitize';
 
 export default function KbStatusBanner() {
   const [dismissed, setDismissed] = useState(false);
+  // null means "not determined": the banner is only shown when a probe succeeds and
+  // comes back with no results. Treating a failed probe as "empty" would show a
+  // misleading message whenever the request itself was rejected.
   const [hasDocuments, setHasDocuments] = useState(null);
   const [loading, setLoading] = useState(true);
   const credentials = useContext(CredentialsContext);
@@ -26,12 +30,19 @@ export default function KbStatusBanner() {
         const command = new RetrieveCommand({
           knowledgeBaseId: bedrockConfig.knowledgeBaseId,
           retrievalQuery: { text: "test" },
-          retrievalConfiguration: { vectorSearchConfiguration: { numberOfResults: 1 } }
+          // A managed knowledge base rejects vectorSearchConfiguration and requires
+          // managedSearchConfiguration instead.
+          retrievalConfiguration: isManagedKnowledgeBase()
+            ? { managedSearchConfiguration: { numberOfResults: 1 } }
+            : { vectorSearchConfiguration: { numberOfResults: 1 } }
         });
         const response = await client.send(command);
-        setHasDocuments(response.retrievalResults && response.retrievalResults.length > 0);
+        setHasDocuments((response.retrievalResults?.length ?? 0) > 0);
       } catch (error) {
-        setHasDocuments(false);
+        // Leave the state undetermined so the banner stays hidden rather than
+        // claiming the knowledge base is empty when the check could not run.
+        console.warn('Knowledge base status check failed:', sanitizeForLog(error?.message ?? 'unknown error'));
+        setHasDocuments(null);
       } finally {
         setLoading(false);
       }
@@ -39,7 +50,7 @@ export default function KbStatusBanner() {
     checkKbStatus();
   }, [credentials]);
 
-  if (dismissed || loading || hasDocuments) return null;
+  if (dismissed || loading || hasDocuments !== false) return null;
 
   return (
     <Alert variant="info" dismissible onDismiss={() => setDismissed(true)}>

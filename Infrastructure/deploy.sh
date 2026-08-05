@@ -405,6 +405,7 @@ SKIP_RAG=false
 SKIP_RAG_SET=false
 VECTOR_STORE=""
 VECTOR_STORE_SET=false
+MANAGED_KB_EMBEDDING=""
 while [[ $# -gt 0 ]]; do
   key="$1"
   case $key in
@@ -507,6 +508,11 @@ while [[ $# -gt 0 ]]; do
     shift
     shift
     ;;
+    --managed-kb-embedding)
+    MANAGED_KB_EMBEDDING="$2"
+    shift
+    shift
+    ;;
     *)
     shift
     ;;
@@ -551,8 +557,14 @@ if [ -z "$STACK_NAME" ]; then
   echo "  --debug                               Print full CloudFormation commands (for debugging)"
   echo "  --rollback                            Delete all stacks (cleanup)"
   echo "  --skip-rag                            Skip RAG infrastructure (works with any endpoint type)"
-  echo "  --vector-store <type>                 RAG vector store: opensearch or s3vectors (default: opensearch)"
-  echo "                                        s3vectors uses Amazon S3 Vectors (lower cost, fully managed)."
+  echo "  --vector-store <type>                 RAG vector store: opensearch, s3vectors, or managed"
+  echo "                                        (default: opensearch)"
+  echo "                                        s3vectors uses Amazon S3 Vectors (lower cost, customer-owned)."
+  echo "                                        managed uses an Amazon Bedrock Managed Knowledge Base"
+  echo "                                        (Bedrock owns the vector store; nothing to provision)."
+  echo "  --managed-kb-embedding <type>         Embedding model for --vector-store managed:"
+  echo "                                        AUTO, MANAGED, or CUSTOM (default: AUTO)."
+  echo "                                        AUTO uses MANAGED in commercial and CUSTOM in GovCloud."
   exit 1
 fi
 
@@ -744,15 +756,17 @@ fi
 
 # Select the RAG vector store backend (only relevant when RAG is deployed)
 if [ "$SKIP_RAG" = true ]; then
-  # Vector store is unused when RAG is skipped; default keeps CloudFormation happy
+  # Vector store is unused when RAG is skipped; defaults keep CloudFormation happy
   VECTOR_STORE="opensearch"
+  MANAGED_KB_EMBEDDING="AUTO"
 else
   # Prompt for the vector store when it was not provided on the CLI
   if [ "$VECTOR_STORE_SET" = false ]; then
     echo ""
     echo "Select the vector store for RAG:"
     echo "  1) opensearch - Amazon OpenSearch Serverless (default)"
-    echo "  2) s3vectors  - Amazon S3 Vectors (lower cost, fully managed)"
+    echo "  2) s3vectors  - Amazon S3 Vectors (lower cost, customer-owned bucket/index)"
+    echo "  3) managed    - Amazon Bedrock Managed Knowledge Base (Bedrock owns the vector store)"
     echo ""
 
     while true; do
@@ -775,8 +789,12 @@ else
           VECTOR_STORE="s3vectors"
           break
           ;;
+        managed|managed-kb|3)
+          VECTOR_STORE="managed"
+          break
+          ;;
         *)
-          echo "Invalid input. Please enter 'opensearch' or 's3vectors'."
+          echo "Invalid input. Please enter 'opensearch', 's3vectors', or 'managed'."
           ;;
       esac
     done
@@ -788,11 +806,14 @@ else
   if [ "$VECTOR_STORE" = "s3-vectors" ]; then
     VECTOR_STORE="s3vectors"
   fi
+  if [ "$VECTOR_STORE" = "managed-kb" ]; then
+    VECTOR_STORE="managed"
+  fi
 
   # Validate the selected value
-  if [ "$VECTOR_STORE" != "opensearch" ] && [ "$VECTOR_STORE" != "s3vectors" ]; then
+  if [ "$VECTOR_STORE" != "opensearch" ] && [ "$VECTOR_STORE" != "s3vectors" ] && [ "$VECTOR_STORE" != "managed" ]; then
     echo "Error: Invalid --vector-store value '$VECTOR_STORE'"
-    echo "Valid values are: opensearch or s3vectors"
+    echo "Valid values are: opensearch, s3vectors, or managed"
     exit 1
   fi
 
@@ -807,6 +828,45 @@ else
     echo "Serverless) instead. This restriction can be removed once S3 Vectors"
     echo "launches in GovCloud."
     exit 1
+  fi
+
+  # Normalize and validate the Managed Knowledge Base embedding model type.
+  if [ -z "$MANAGED_KB_EMBEDDING" ]; then
+    MANAGED_KB_EMBEDDING="AUTO"
+  fi
+  MANAGED_KB_EMBEDDING=$(echo "$MANAGED_KB_EMBEDDING" | tr '[:lower:]' '[:upper:]')
+  if [ "$MANAGED_KB_EMBEDDING" != "AUTO" ] && [ "$MANAGED_KB_EMBEDDING" != "MANAGED" ] && [ "$MANAGED_KB_EMBEDDING" != "CUSTOM" ]; then
+    echo "Error: Invalid --managed-kb-embedding value '$MANAGED_KB_EMBEDDING'"
+    echo "Valid values are: AUTO, MANAGED, or CUSTOM"
+    exit 1
+  fi
+
+  # Gate: Amazon Bedrock Managed Knowledge Bases are only available in a subset of
+  # Regions. Fail fast rather than rolling back the bedrock stack. Update this list
+  # as AWS expands Regional availability.
+  if [ "$VECTOR_STORE" = "managed" ]; then
+    MANAGED_KB_REGIONS="us-east-1 us-west-2 eu-west-1 eu-west-2 eu-central-1 ap-northeast-1 ap-southeast-2 us-gov-west-1"
+    if ! echo " $MANAGED_KB_REGIONS " | grep -q " $REGION "; then
+      echo "Error: --vector-store managed is not available in $REGION."
+      echo "Amazon Bedrock Managed Knowledge Bases are available in:"
+      echo "  $MANAGED_KB_REGIONS"
+      echo "Use '--vector-store opensearch' or '--vector-store s3vectors' in this Region."
+      exit 1
+    fi
+
+    # GovCloud has no service-managed embedding model, so a customer-supplied
+    # Bedrock embedding model is required there.
+    if [ "$IS_GOVCLOUD" = true ]; then
+      if [ "$MANAGED_KB_EMBEDDING" = "MANAGED" ]; then
+        echo "Error: --managed-kb-embedding MANAGED is not supported in GovCloud ($REGION)."
+        echo "Service-managed embedding models for Bedrock Managed Knowledge Bases are not"
+        echo "available in the aws-us-gov partition. Use '--managed-kb-embedding CUSTOM' or"
+        echo "leave the default (AUTO), which selects CUSTOM automatically in GovCloud."
+        exit 1
+      fi
+      echo "Note: GovCloud detected. The Managed Knowledge Base will use a customer-supplied"
+      echo "      embedding model; service-managed embedding and reranking are unavailable."
+    fi
   fi
 fi
 
@@ -824,6 +884,9 @@ echo "GovCloud: $IS_GOVCLOUD"
 echo "Skip RAG: $SKIP_RAG"
 if [ "$SKIP_RAG" != true ]; then
   echo "Vector Store: $VECTOR_STORE"
+  if [ "$VECTOR_STORE" = "managed" ]; then
+    echo "Managed KB Embedding: $MANAGED_KB_EMBEDDING"
+  fi
 fi
 if [ "$IS_GOVCLOUD" = true ]; then
   echo "API Gateway Name: $API_GATEWAY_NAME"
@@ -1070,7 +1133,8 @@ deploy_stack "$STACK_NAME-bedrock" "CloudFormation/bedrock.yaml" \
   "AgentInstruction=You are a helpful AI assistant. You will only answer based on information from your knowledge base. Never hallucinate, simply say you don't know if you don't have citable information in your knowledge base." \
   "OSSCollectionName=$STACK_NAME-oss" \
   "SkipRag=$SKIP_RAG" \
-  "VectorStore=$VECTOR_STORE"
+  "VectorStore=$VECTOR_STORE" \
+  "ManagedKbEmbeddingModelType=$MANAGED_KB_EMBEDDING"
 
 # Extract Bedrock stack outputs
 echo "Extracting Bedrock stack outputs..."
@@ -1177,6 +1241,14 @@ CONFIG_API_PARAMS=(
 [ -n "$GUARDRAIL_ID" ] && CONFIG_API_PARAMS+=("BedrockGuardrailId=$GUARDRAIL_ID")
 [ -n "$GUARDRAIL_VERSION" ] && CONFIG_API_PARAMS+=("BedrockGuardrailVersion=$GUARDRAIL_VERSION")
 CONFIG_API_PARAMS+=("RagEnabled=$RAG_ENABLED")
+# Surface the vector store backend to the web app. The UI uses this to pick the
+# correct data source shape when adding a website to crawl, since managed
+# knowledge bases use a different connector API than self-managed ones.
+if [ "$SKIP_RAG" = true ]; then
+  CONFIG_API_PARAMS+=("BedrockVectorStore=none")
+else
+  CONFIG_API_PARAMS+=("BedrockVectorStore=$VECTOR_STORE")
+fi
 [ -n "$VPCE_URL_dynamodb" ] && CONFIG_API_PARAMS+=("VpceDynamodb=$VPCE_URL_dynamodb")
 [ -n "$VPCE_URL_bedrock" ] && CONFIG_API_PARAMS+=("VpceBedrock=$VPCE_URL_bedrock")
 [ -n "$VPCE_URL_bedrockRuntime" ] && CONFIG_API_PARAMS+=("VpceBedrockRuntime=$VPCE_URL_bedrockRuntime")
@@ -1373,9 +1445,48 @@ echo "=========================================="
 if [ "$SKIP_RAG" = true ]; then
   echo "Skipping KB ingestion (RAG skipped)"
 else
-  echo "Starting ingestion job for Knowledge Base: $KB_ID"
-  aws bedrock-agent start-ingestion-job --knowledge-base-id $KB_ID --data-source-id $DATASOURCE_ID
-  echo "Ingestion job started successfully"
+  # For a Bedrock Managed Knowledge Base, CreateDataSource is asynchronous: the
+  # data source reports CREATING for a while after CloudFormation returns, and
+  # StartIngestionJob is rejected until it reaches AVAILABLE. Poll before syncing.
+  if [ "$VECTOR_STORE" = "managed" ]; then
+    echo "Waiting for managed data source $DATASOURCE_ID to become AVAILABLE..."
+    DS_WAIT_ATTEMPTS=60
+    DS_WAIT_SECONDS=10
+    DS_STATUS=""
+    for ((i=1; i<=DS_WAIT_ATTEMPTS; i++)); do
+      DS_STATUS=$(aws bedrock-agent get-data-source \
+        --knowledge-base-id "$KB_ID" \
+        --data-source-id "$DATASOURCE_ID" \
+        --query 'dataSource.status' --output text 2>/dev/null)
+
+      case "$DS_STATUS" in
+        AVAILABLE)
+          echo "Data source is AVAILABLE"
+          break
+          ;;
+        CREATE_FAILED|DELETING|DELETE_UNSUCCESSFUL)
+          echo "Error: Data source entered status $DS_STATUS; skipping ingestion."
+          break
+          ;;
+        *)
+          echo "  status=${DS_STATUS:-unknown} (attempt $i/$DS_WAIT_ATTEMPTS)"
+          sleep $DS_WAIT_SECONDS
+          ;;
+      esac
+    done
+
+    if [ "$DS_STATUS" != "AVAILABLE" ]; then
+      echo "Warning: Data source did not reach AVAILABLE in time."
+      echo "         Start the sync manually from the UI or with:"
+      echo "         aws bedrock-agent start-ingestion-job --knowledge-base-id $KB_ID --data-source-id $DATASOURCE_ID"
+    fi
+  fi
+
+  if [ "$VECTOR_STORE" != "managed" ] || [ "$DS_STATUS" = "AVAILABLE" ]; then
+    echo "Starting ingestion job for Knowledge Base: $KB_ID"
+    aws bedrock-agent start-ingestion-job --knowledge-base-id "$KB_ID" --data-source-id "$DATASOURCE_ID"
+    echo "Ingestion job started successfully"
+  fi
 fi
 echo ""
 

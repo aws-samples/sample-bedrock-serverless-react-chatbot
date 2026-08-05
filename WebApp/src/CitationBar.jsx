@@ -8,6 +8,7 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { bedrockConfig, vpceEndpoints } from './aws-config';
 import DocumentViewer, { isViewableFile } from './DocumentViewer';
+import { parseS3Uri } from './utils/s3Uri';
 
 const CitationBar = ({ citations, credentials, citationChipRefs }) => {
   const [viewerState, setViewerState] = useState({ visible: false, fileName: '', fileUrl: null, fileUri: '', citationTexts: [] });
@@ -24,7 +25,11 @@ const CitationBar = ({ citations, credentials, citationChipRefs }) => {
   const getFileName = (uri) => { try { return decodeURIComponent(uri).split('/').pop() || uri; } catch { return uri.split('/').pop() || uri; } };
   const generatePresignedUrl = async (s3Uri) => {
     if (!credentials || !s3Uri) return null;
-    try { const w = s3Uri.replace('s3://', ''); const si = w.indexOf('/'); const s3Client = new S3Client({ region: bedrockConfig.region, credentials, ...(vpceEndpoints.s3 && { endpoint: vpceEndpoints.s3, forcePathStyle: true }) }); return await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: w.substring(0, si), Key: w.substring(si + 1) }), { expiresIn: 60 }); }
+    // Handles both the canonical s3://bucket/key form and the percent-encoded HTTPS
+    // form that Bedrock Managed Knowledge Bases return.
+    const location = parseS3Uri(s3Uri);
+    if (!location) return null;
+    try { const s3Client = new S3Client({ region: bedrockConfig.region, credentials, ...(vpceEndpoints.s3 && { endpoint: vpceEndpoints.s3, forcePathStyle: true }) }); return await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: location.bucket, Key: location.key }), { expiresIn: 60 }); }
     catch { return null; }
   };
   const getCitationTextsForUri = (uri) => {

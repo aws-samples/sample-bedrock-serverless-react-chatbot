@@ -154,6 +154,26 @@ Resources:
             Condition:
               StringEquals:
                 'kms:ViaService': !Sub 'bedrock.${AWS::Region}.amazonaws.com'
+
+          # An Amazon Bedrock Managed Knowledge Base encrypts both its transient
+          # ingestion data and its permanent index with this key. Bedrock creates a
+          # grant on the key when the knowledge base is created and retires it on
+          # deletion, so the grant operations it uses must be permitted here in
+          # addition to the read-only actions above. Every action is constrained to
+          # calls made through Bedrock in this Region.
+          - Sid: Allow Bedrock Managed Knowledge Base Data Storage
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action:
+              - 'kms:Encrypt'
+              - 'kms:GenerateDataKey'
+              - 'kms:GenerateDataKeyWithoutPlaintext'
+              - 'kms:RetireGrant'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'kms:ViaService': !Sub 'bedrock.${AWS::Region}.amazonaws.com'
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-bedrock-key'

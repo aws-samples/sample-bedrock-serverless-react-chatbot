@@ -116,6 +116,20 @@ Parameters:
       - "false"
     Description: "Whether RAG (Knowledge Base) is enabled for this deployment"
 
+  BedrockVectorStore:
+    Type: String
+    Default: "none"
+    AllowedValues:
+      - "opensearch"
+      - "s3vectors"
+      - "managed"
+      - "none"
+    Description: >-
+      Vector store backing the Knowledge Base. The web app uses this to select the
+      correct data source API shape: "managed" (Bedrock Managed Knowledge Base) uses
+      connector-based data sources, while "opensearch" and "s3vectors" use the
+      self-managed data source types.
+
   # VPCE Parameters (7)
   VpceDynamodb:
     Type: String
@@ -197,6 +211,13 @@ Resources:
       Name: !Sub /${AWS::StackName}/bedrock/dataSourceId
       Type: String
       Value: !Ref BedrockDataSourceId
+
+  SSMBedrockVectorStore:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/vectorStore
+      Type: String
+      Value: !Ref BedrockVectorStore
 
   SSMBedrockKnowledgeBaseS3Bucket:
     Type: AWS::SSM::Parameter
@@ -457,7 +478,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub "${AWS::StackName}-ConfigLambda"
-      Runtime: python3.11
+      Runtime: python3.13
       Handler: index.lambda_handler
       Role: !GetAtt ConfigLambdaRole.Arn
       ReservedConcurrentExecutions: 1
@@ -520,7 +541,8 @@ Resources:
                           "guardrailId": _val(params, "bedrock/guardrailId"),
                           "guardrailVersion": _val(params, "bedrock/guardrailVersion"),
                           "defaultPrompt": _val(params, "bedrock/defaultPrompt"),
-                          "ragEnabled": _val(params, "bedrock/ragEnabled")
+                          "ragEnabled": _val(params, "bedrock/ragEnabled"),
+                          "vectorStore": _val(params, "bedrock/vectorStore")
                       },
                       "dynamoConfig": {
                           "region": region,

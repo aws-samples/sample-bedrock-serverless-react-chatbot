@@ -8,6 +8,8 @@ This is a sample Amazon Bedrock powered serverless chatbot that's deployed throu
 >
 > **Availability:** Amazon S3 Vectors for Bedrock Knowledge Bases is currently available **only in the AWS Commercial (`aws`) partition**. It is **not yet available in AWS GovCloud (US) (`aws-us-gov`)**, so `--vector-store s3vectors` is blocked when deploying to GovCloud; use `--vector-store opensearch` there. This solution will be updated to support S3 Vectors deployments in GovCloud once the feature becomes available in that partition.
 
+> **Update — Amazon Bedrock Managed Knowledge Base support:** The Bedrock stack now also supports **Amazon Bedrock Managed Knowledge Base**, where Bedrock owns the vector store, indexing, and retrieval infrastructure outright. Select it with `--vector-store managed`. Unlike the other two options, this creates **no vector store resources in your account** — no OpenSearch Serverless collection, no S3 vector bucket, and no index-creator Lambda. See [Choosing a Vector Store](#-choosing-a-vector-store) for the trade-offs and Regional availability.
+
 ## Table of Contents
 
 - [Serverless Amazon Bedrock React Chatbot](#serverless-amazon-bedrock-react-chatbot)
@@ -16,6 +18,7 @@ This is a sample Amazon Bedrock powered serverless chatbot that's deployed throu
   - [🖥️ UI and Architecture Diagram](#️-ui-and-architecture-diagram)
   - [📁 Project Structure](#-project-structure)
   - [🚀 Deployment](#-deployment)
+  - [🗂️ Choosing a Vector Store](#-choosing-a-vector-store)
   - [🔒 Deploying in an Isolated VPC with VPC Endpoints](#-deploying-in-an-isolated-vpc-with-vpc-endpoints)
     - [API Gateway Resource Policy (PRIVATE Endpoints)](#api-gateway-resource-policy-private-endpoints)
   - [🚫 Skipping RAG Infrastructure](#-skipping-rag-infrastructure)
@@ -41,7 +44,8 @@ This is a sample Amazon Bedrock powered serverless chatbot that's deployed throu
 - API Gateway with REGIONAL or PRIVATE endpoint support (GovCloud)
 - Full VPC endpoint support for isolated/private deployments
 - Skip RAG mode for PRIVATE deployments that only need direct LLM access
-- Infrastructure as Code with KMS encryption, access logging, and least-privilege IAM
+- Selectable vector store: OpenSearch Serverless, Amazon S3 Vectors, or a fully Bedrock-managed knowledge base
+- Infrastructure as Code with KMS encryption, access logging, and least-privilege IAM using only customer managed policies (no inline role policies)
 
 ## 🖥️ UI and Architecture Diagram
 
@@ -114,9 +118,46 @@ cd sample-bedrock-serverless-react-chatbot/Infrastructure
    - `--guardrail-version <version>` — Bedrock Guardrail version (default: empty)
    - `--debug` — Print full CloudFormation commands for troubleshooting
    - `--skip-rag` — Skip RAG infrastructure (works with any endpoint type). If not provided, the script will prompt you interactively.
+   - `--vector-store <type>` — Vector store for RAG: `opensearch`, `s3vectors`, or `managed` (default: `opensearch`). If not provided, the script will prompt you interactively. See [Choosing a Vector Store](#-choosing-a-vector-store).
+   - `--managed-kb-embedding <type>` — Embedding model for `--vector-store managed`: `AUTO`, `MANAGED`, or `CUSTOM` (default: `AUTO`)
    - `--rollback` — Delete all stacks created by a previous deployment
 
 3. Check the CloudFormation outputs section for your CloudFront distribution link (commercial) or API Gateway URL (GovCloud) and test out your new RAG Chatbot!
+
+## 🗂️ Choosing a Vector Store
+
+The Bedrock Knowledge Base can be backed by three different vector stores, selected with `--vector-store`. If you don't pass the flag, `deploy.sh` prompts you.
+
+| | `opensearch` (default) | `s3vectors` | `managed` |
+|---|---|---|---|
+| Knowledge base type | Customer-managed (`VECTOR`) | Customer-managed (`VECTOR`) | Bedrock Managed (`MANAGED`) |
+| Resources created in your account | OpenSearch Serverless collection, security/access policies, index-creator Lambda + layer | S3 vector bucket and vector index | None |
+| Who scales the store | You | Amazon S3 | Amazon Bedrock |
+| Embedding model | Titan Text Embeddings V2 | Titan Text Embeddings V2 | Service-managed by default |
+| Vector store IAM permissions on the KB role | `aoss:APIAccessAll` | `s3vectors:*` on the index | None required |
+| Relative cost | Highest (always-on collection) | Lower | Pay per indexed data and retrieval |
+
+### The `managed` option
+
+With `--vector-store managed`, Bedrock owns the entire retrieval pipeline. The stack creates only the `AWS::Bedrock::KnowledgeBase` (with `KnowledgeBaseConfiguration.Type: MANAGED` and no `StorageConfiguration`) and a connector-based data source pointing at the knowledge base S3 bucket. There is no collection to size, no index to create, and no index-creator Lambda.
+
+This is also the least-privilege option: because there is no customer-owned vector store, the Knowledge Base service role gets **no** vector store permissions at all. When the service-managed embedding model is used, the role also needs no `bedrock:InvokeModel` permission, so its policy reduces to S3 read access on the document buckets, KMS decrypt for those buckets, and operations on its own knowledge base.
+
+**Regional availability.** Managed knowledge bases are available in `us-east-1`, `us-west-2`, `eu-west-1`, `eu-west-2`, `eu-central-1`, `ap-northeast-1`, `ap-southeast-2`, and `us-gov-west-1`. Both `deploy.sh` and a CloudFormation `Rules` assertion in `bedrock.yaml` reject other Regions up front rather than letting the stack roll back. Update both lists as AWS expands availability.
+
+**Embedding model.** `--managed-kb-embedding` controls which embedding model the managed knowledge base uses:
+
+- `AUTO` (default) — `MANAGED` in commercial Regions, `CUSTOM` in GovCloud
+- `MANAGED` — the service-managed embedding model. No model access required, and it enables the built-in managed reranker
+- `CUSTOM` — your own Bedrock embedding model (defaults to `amazon.titan-embed-text-v2:0` at 1024 dimensions, FLOAT32). Selecting a custom embedding model makes the managed reranker unavailable
+
+The embedding model type cannot be changed after the knowledge base is created; switching requires replacing it.
+
+**GovCloud differences.** In `us-gov-west-1`, managed knowledge bases do not offer service-managed embedding, reranking, or agentic retrieval, and only the Amazon S3 connector is available. `AUTO` therefore resolves to `CUSTOM` there, and passing `--managed-kb-embedding MANAGED` is rejected before deployment starts.
+
+**Encryption.** The managed vector store is encrypted with the Foundation stack's customer managed Bedrock KMS key. Bedrock creates a KMS grant on that key when the knowledge base is created and retires it on deletion, so the principal running `deploy.sh` needs `kms:CreateGrant` on the key. The Knowledge Base service role itself needs no permissions on it.
+
+**Website crawling.** Managed knowledge bases use connector-based data sources, so the web app sends a different `CreateDataSource` shape when the deployment uses `managed`. Crawl limits map onto the managed connector's controls: *Max Pages* becomes the maximum links followed per URL (1–1000) and *Rate Limit* becomes URLs crawled per minute (1–300). The UI notes this inline.
 
 ## 🔒 Deploying in an Isolated VPC with VPC Endpoints
 
@@ -157,7 +198,7 @@ For REGIONAL endpoints, no resource policy is applied.
 
 ## 🚫 Skipping RAG Infrastructure
 
-For deployments that only need direct LLM access (no Knowledge Base or document retrieval), you can skip all RAG infrastructure. This omits OpenSearch Serverless, the Bedrock Knowledge Base, and the KB S3 bucket, reducing deployment time and cost. This works with any endpoint type (REGIONAL, PRIVATE, etc.).
+For deployments that only need direct LLM access (no Knowledge Base or document retrieval), you can skip all RAG infrastructure. This omits the vector store, the Bedrock Knowledge Base, and the KB S3 bucket, reducing deployment time and cost. This works with any endpoint type (REGIONAL, PRIVATE, etc.).
 
 There are two ways to enable this:
 
@@ -230,7 +271,7 @@ Alternatively, `deploy.sh --rollback` performs the same teardown.
 
 ## 📚 Additional Documentation
 
-- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md) <!-- TODO -->
+- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 📄 License
 

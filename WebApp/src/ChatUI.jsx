@@ -130,13 +130,13 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
   };
   return (
     <div className="h-full flex flex-col min-h-0 overflow-hidden relative">
-      <div className="max-w-3xl mx-auto w-full p-4">
+      <div className="max-w-4xl mx-auto w-full p-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold">Chat UI</h1>
-            <p className="text-sm text-muted-foreground">{chatType === 'RAG' ? 'Ask about your knowledge base.' : chatType === 'Agentic' ? 'Ask anything - I can send emails and search the web.' : 'Ask me anything.'}</p>
+            <p className="text-sm text-muted-foreground truncate">{chatType === 'RAG' ? 'Ask about your knowledge base.' : chatType === 'Agentic' ? 'Ask anything - I can send emails and search the web.' : 'Ask me anything.'}</p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-nowrap items-center justify-end gap-2 min-w-0 sm:flex-1">
             {isMobile ? (
               <Popover>
                 <PopoverTrigger className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent transition-colors"><Settings className="h-4 w-4" /></PopoverTrigger>
@@ -147,11 +147,11 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
               </Popover>
             ) : (
               <>
-                <div className="w-[180px]"><Select value={chatType} onValueChange={setChatType}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{chatTypeOptions.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select></div>
-                <div className="w-[180px]"><PersonaSelector selectedPersonaId={selectedPersonaId} onPersonaChange={handlePersonaChange} personas={personas} /></div>
+                <div className="flex-1 min-w-[120px] max-w-[180px]"><Select value={chatType} onValueChange={setChatType}><SelectTrigger title={chatTypeOptions.find(t => t.value === chatType)?.label}><SelectValue /></SelectTrigger><SelectContent>{chatTypeOptions.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select></div>
+                <div className="flex-1 min-w-[120px] max-w-[180px]"><PersonaSelector selectedPersonaId={selectedPersonaId} onPersonaChange={handlePersonaChange} personas={personas} /></div>
               </>
             )}
-            <button onClick={newSession} className="flex h-9 items-center gap-2 whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm"><RefreshCw className="h-4 w-4" />{!isMobile && "New Session"}</button>
+            <button onClick={newSession} className="flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm"><RefreshCw className="h-4 w-4" />{!isMobile && "New Session"}</button>
           </div>
         </div>
       </div>
