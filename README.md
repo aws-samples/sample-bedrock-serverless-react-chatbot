@@ -271,7 +271,7 @@ Alternatively, `deploy.sh --rollback` performs the same teardown.
 
 ## 📚 Additional Documentation
 
-- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md) <!-- TODO -->
+- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 📄 License
 
