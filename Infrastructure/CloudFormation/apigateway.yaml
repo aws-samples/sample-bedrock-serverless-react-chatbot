@@ -180,9 +180,19 @@ Resources:
           "method.response.header.Content-Type": false
           "method.response.header.content-type": false
         StatusCode: "200"
+      # Error responses must declare Content-Type as a method response header so the
+      # integration responses below can override S3's application/xml with our own
+      # sanitized body. Without these the raw S3 <Error> XML (which contains
+      # <BucketName> and <Key>) is returned to the caller verbatim.
       - 
-        StatusCode: "400"
+        ResponseParameters: 
+          "method.response.header.Access-Control-Allow-Origin": false
+          "method.response.header.Content-Type": false
+        StatusCode: "404"
       - 
+        ResponseParameters: 
+          "method.response.header.Access-Control-Allow-Origin": false
+          "method.response.header.Content-Type": false
         StatusCode: "500"
       Integration: 
         Credentials: !GetAtt IAMRole.Arn
@@ -194,12 +204,44 @@ Resources:
             "method.response.header.Content-Type": "integration.response.header.Content-Type"
             "method.response.header.content-type": "integration.response.header.content-type"
           StatusCode: "200"
+        # S3 returns an XML <Error> document on failure that echoes the bucket name and
+        # object key (NoSuchKey when the object is missing, AccessDenied when the object
+        # is missing and the role has no s3:ListBucket - which is the case here). Both
+        # collapse into this 4xx branch. ResponseTemplates replace the body with a static
+        # page so nothing about the bucket or key reaches the caller.
+        #
+        # ContentHandling: CONVERT_TO_TEXT is required because BinaryMediaTypes on this
+        # API is "*/*", which makes API Gateway treat every response as binary and skip
+        # body mapping templates. Forcing text handling on the error branches only keeps
+        # binary passthrough intact for real assets on the 200 branch.
+        #
+        # Templates are keyed by several content types because API Gateway selects a
+        # response template by matching against the payload/Accept content type; a single
+        # key would be bypassed for callers negotiating a different type.
         - 
           SelectionPattern: "4\\d{2}"
-          StatusCode: "400"
+          StatusCode: "404"
+          ContentHandling: "CONVERT_TO_TEXT"
+          ResponseParameters: 
+            "method.response.header.Access-Control-Allow-Origin": "'*'"
+            "method.response.header.Content-Type": "'text/html'"
+          ResponseTemplates: 
+            "application/xml": '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Not Found</title></head><body><h1>Not Found</h1><p>The requested resource is not available.</p></body></html>'
+            "text/xml": '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Not Found</title></head><body><h1>Not Found</h1><p>The requested resource is not available.</p></body></html>'
+            "application/json": '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Not Found</title></head><body><h1>Not Found</h1><p>The requested resource is not available.</p></body></html>'
+            "text/html": '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Not Found</title></head><body><h1>Not Found</h1><p>The requested resource is not available.</p></body></html>'
         - 
           SelectionPattern: "5\\d{2}"
           StatusCode: "500"
+          ContentHandling: "CONVERT_TO_TEXT"
+          ResponseParameters: 
+            "method.response.header.Access-Control-Allow-Origin": "'*'"
+            "method.response.header.Content-Type": "'text/html'"
+          ResponseTemplates: 
+            "application/xml": '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Error</title></head><body><h1>Error</h1><p>The request could not be completed.</p></body></html>'
+            "text/xml": '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Error</title></head><body><h1>Error</h1><p>The request could not be completed.</p></body></html>'
+            "application/json": '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Error</title></head><body><h1>Error</h1><p>The request could not be completed.</p></body></html>'
+            "text/html": '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Error</title></head><body><h1>Error</h1><p>The request could not be completed.</p></body></html>'
         PassthroughBehavior: "WHEN_NO_MATCH"
         RequestParameters: 
           "integration.request.path.object": "method.request.path.item"
@@ -264,7 +306,7 @@ Resources:
     Properties:
       RestApiId: !Ref ApiGatewayRestApi
       StageName: "v1"    # You can change this to your desired stage name
-      DeploymentId: !Ref ApiGatewayDeployment
+      DeploymentId: !Ref ApiGatewayDeploymentV2
       MethodSettings:
         - ResourcePath: "/*"
           HttpMethod: "*"
@@ -273,11 +315,54 @@ Resources:
         DestinationArn: !GetAtt APIGatewayLogGroup.Arn
         Format: '$context.requestId $context.extendedRequestId $context.identity.sourceIp $context.requestTime $context.routeKey $context.status'
 
-  ApiGatewayDeployment:
+  # Gateway Responses - sanitize errors raised by API Gateway itself, before the
+  # integration is ever reached (unknown path, WAF block, throttling). The stock
+  # DEFAULT_4XX body leaks internals such as "Missing Authentication Token", which
+  # is what a request to /v1/chatbot (no object key) returns.
+  GatewayResponseDefault4XX:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResponseType: DEFAULT_4XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Content-Type: "'text/html'"
+      ResponseTemplates:
+        application/json: '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Not Found</title></head><body><h1>Not Found</h1><p>The requested resource is not available.</p></body></html>'
+
+  GatewayResponseDefault5XX:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResponseType: DEFAULT_5XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Content-Type: "'text/html'"
+      ResponseTemplates:
+        application/json: '<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>Error</title></head><body><h1>Error</h1><p>The request could not be completed.</p></body></html>'
+
+  ###############################
+  # Deployment logical ID is versioned on purpose.
+  #
+  # AWS::ApiGateway::Deployment captures a snapshot of the API model at create time.
+  # Editing a method, integration response or gateway response above does NOT produce
+  # a new snapshot, so CloudFormation reports UPDATE_COMPLETE while the live v1 stage
+  # keeps serving the old model. Bumping Description does not help either - that is an
+  # in-place update on the existing deployment.
+  #
+  # Any time the API model above changes, increment the V<n> suffix here and in the
+  # Stage's DeploymentId.
+  #
+  # V2: sanitized 4xx/5xx integration responses and added gateway responses so S3
+  #     error XML (bucket name + object key) is no longer returned to callers.
+  ###############################
+  ApiGatewayDeploymentV2:
     Type: "AWS::ApiGateway::Deployment"
     DependsOn:
       - ApiGatewayMethod
       - ApiGatewayMethod2
+      - GatewayResponseDefault4XX
+      - GatewayResponseDefault5XX
     Properties:
       RestApiId: !Ref ApiGatewayRestApi
       Description: "Deployment for chatbot API"
