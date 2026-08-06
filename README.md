@@ -132,7 +132,7 @@ The Bedrock Knowledge Base can be backed by three different vector stores, selec
 |---|---|---|---|
 | Knowledge base type | Customer-managed (`VECTOR`) | Customer-managed (`VECTOR`) | Bedrock Managed (`MANAGED`) |
 | Resources created in your account | OpenSearch Serverless collection, security/access policies, index-creator Lambda + layer | S3 vector bucket and vector index | None |
-| Who scales the store | You | Amazon S3 | Amazon Bedrock |
+| Who scales the store | OpenSearch Serverless, within the account-level max OCU limits you set | Amazon S3 | Amazon Bedrock |
 | Embedding model | Titan Text Embeddings V2 | Titan Text Embeddings V2 | Service-managed by default |
 | Vector store IAM permissions on the KB role | `aoss:APIAccessAll` | `s3vectors:*` on the index | None required |
 | Relative cost | Highest (always-on collection) | Lower | Pay per indexed data and retrieval |
