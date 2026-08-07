@@ -23,6 +23,7 @@ This is a sample Amazon Bedrock powered serverless chatbot that's deployed throu
     - [API Gateway Resource Policy (PRIVATE Endpoints)](#api-gateway-resource-policy-private-endpoints)
   - [🚫 Skipping RAG Infrastructure](#-skipping-rag-infrastructure)
   - [⚙️ Runtime Configuration (Config API)](#️-runtime-configuration-config-api)
+  - [🛡️ Model Management (Admin & User)](#️-model-management-admin--user)
   - [🔄 Redeploying the Web App](#-redeploying-the-web-app)
   - [🗑️ Tearing Down the Deployment](#️-tearing-down-the-deployment)
   - [📚 Additional Documentation](#-additional-documentation)
@@ -38,6 +39,8 @@ This is a sample Amazon Bedrock powered serverless chatbot that's deployed throu
 - Real-time knowledge base sync and ingestion status
 - Document viewer with PDF and DOCX support, including citation highlighting
 - Support for multiple model selections
+- Administrator group with system-wide default model management (SSM Parameter Store)
+- Per-user default model preferences (DynamoDB-backed)
 - Cognito-based authentication with email domain restriction
 - Automated CI/CD pipeline (CodePipeline + CodeBuild) triggered on S3 upload
 - CloudFront distribution with WAF, security headers, and OAC (commercial)
@@ -235,6 +238,26 @@ In commercial regions, the Config API Gateway is a separate REGIONAL API Gateway
 On page load, the web app calls the Config API with the user's JWT token and caches the response in `sessionStorage`. All config values (regions, table names, model IDs, etc.) are then available at runtime via proxy objects in `aws-config.js`.
 
 The Config API URL is set via the `VITE_CONFIG_API_URL` environment variable in `WebApp/.env.local`. The CICD stack also receives this URL and injects it during builds.
+
+## 🛡️ Model Management (Admin & User)
+
+The solution supports two levels of default model configuration:
+
+1. **System default (Admin)** — Users in the Cognito `Administrator` group can change the system-wide default model from the sidebar under "Administration > System Default Model". This writes to SSM Parameter Store via a `PUT /config/defaultModel` API endpoint and takes effect for all users who haven't set a personal preference.
+
+2. **Personal default (Per-user)** — Any user can star a model in the model selector dropdown to set it as their personal default. This is stored in the `UserPreferences` DynamoDB table and overrides the system default for that user only.
+
+**Model resolution order:** User preference → Admin default → Deploy-time default.
+
+To add a user to the Administrator group:
+```bash
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id <user-pool-id> \
+  --username <cognito-username> \
+  --group-name Administrator
+```
+
+Administrators also have exclusive access to Knowledge Base management (upload, crawl, sync) and Agent Instructions in the sidebar.
 
 ## 🔄 Redeploying the Web App
 

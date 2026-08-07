@@ -107,6 +107,17 @@ Parameters:
     Type: String
     Description: DynamoDB table name for User Personas
 
+  # Cognito Parameters for Admin Validation
+  CognitoUserPoolArn:
+    Type: String
+    Description: Cognito User Pool ARN for admin group membership validation
+
+  # User Preferences Table
+  UserPreferencesTable:
+    Type: String
+    Description: DynamoDB table name for User Preferences
+    Default: ""
+
   # RAG Feature Flag
   RagEnabled:
     Type: String
@@ -385,6 +396,8 @@ Resources:
       ManagedPolicyArns:
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
         - !Ref ConfigLambdaSSMPolicy
+        - !Ref ConfigLambdaSSMWritePolicy
+        - !Ref ConfigLambdaCognitoPolicy
         - !Ref ConfigLambdaKMSPolicy
         - !Ref ConfigLambdaDLQPolicy
 
@@ -403,6 +416,41 @@ Resources:
             Resource:
               - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}"
               - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/*"
+
+  # SSM write policy - scoped to only the defaultModelId parameter
+  ConfigLambdaSSMWritePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-ConfigLambdaSSMWritePolicy"
+      Path: /
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SSMPutDefaultModelId
+            Effect: Allow
+            Action:
+              - ssm:PutParameter
+            Resource:
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/bedrock/defaultModelId"
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/bedrock/defaultModelName"
+              - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/bedrock/defaultModelProvider"
+
+  # Cognito admin group validation policy - allows Lambda to check group membership
+  ConfigLambdaCognitoPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-ConfigLambdaCognitoPolicy"
+      Path: /
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CognitoAdminGroupCheck
+            Effect: Allow
+            Action:
+              - cognito-idp:AdminListGroupsForUser
+              - cognito-idp:GetUser
+            Resource:
+              - !Ref CognitoUserPoolArn
 
   # KMS decrypt policy - scoped to Lambda KMS key only
   ConfigLambdaKMSPolicy:
@@ -489,6 +537,8 @@ Resources:
       Environment:
         Variables:
           SSM_PREFIX: !Sub "/${AWS::StackName}"
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
+          USER_PREFERENCES_TABLE: !Ref UserPreferencesTable
       Code:
         ZipFile: |
           import json
@@ -502,13 +552,38 @@ Resources:
               v = params.get(key, "")
               return "" if v == SENTINEL else v
 
-          def lambda_handler(event, context):
-              cors_headers = {
+          def _cors_headers(method="GET,OPTIONS"):
+              return {
                   "Content-Type": "application/json",
                   "Access-Control-Allow-Origin": "*",
                   "Access-Control-Allow-Headers": "Content-Type,Authorization",
-                  "Access-Control-Allow-Methods": "GET,OPTIONS"
+                  "Access-Control-Allow-Methods": f"{method},OPTIONS"
               }
+
+          def _is_admin(username):
+              """Check if user belongs to the Administrator group in Cognito."""
+              cognito = boto3.client("cognito-idp")
+              user_pool_id = os.environ["COGNITO_USER_POOL_ID"]
+              try:
+                  response = cognito.admin_list_groups_for_user(
+                      Username=username,
+                      UserPoolId=user_pool_id
+                  )
+                  groups = [g["GroupName"] for g in response.get("Groups", [])]
+                  return "Administrator" in groups
+              except Exception as e:
+                  print(f"Error checking admin group membership: {e}")
+                  return False
+
+          def _get_username_from_event(event):
+              """Extract username from Cognito authorizer claims."""
+              claims = event.get("requestContext", {}).get("authorizer", {}).get("claims", {})
+              # cognito:username is the unique user identifier
+              return claims.get("cognito:username", claims.get("sub", ""))
+
+          def handle_get(event, context):
+              """Handle GET /config - returns all configuration."""
+              cors_headers = _cors_headers("GET")
               try:
                   ssm = boto3.client("ssm")
                   prefix = os.environ["SSM_PREFIX"]
@@ -520,6 +595,10 @@ Resources:
                       for p in page["Parameters"]:
                           relative_key = p["Name"][len(prefix) + 1:]
                           params[relative_key] = p["Value"]
+
+                  # Check if requesting user is an admin
+                  username = _get_username_from_event(event)
+                  is_admin = _is_admin(username) if username else False
 
                   response_body = {
                       "bedrockConfig": {
@@ -547,7 +626,8 @@ Resources:
                       "dynamoConfig": {
                           "region": region,
                           "convHistoryTable": _val(params, "dynamo/convHistoryTable"),
-                          "personaTable": _val(params, "dynamo/personaTable")
+                          "personaTable": _val(params, "dynamo/personaTable"),
+                          "preferencesTable": os.environ.get("USER_PREFERENCES_TABLE", "")
                       },
                       "vpceEndpoints": {
                           "dynamodb": _val(params, "vpce/dynamodb"),
@@ -556,6 +636,9 @@ Resources:
                           "bedrockAgent": _val(params, "vpce/bedrockAgent"),
                           "bedrockAgentRuntime": _val(params, "vpce/bedrockAgentRuntime"),
                           "s3": _val(params, "vpce/s3")
+                      },
+                      "userContext": {
+                          "isAdmin": is_admin
                       }
                   }
 
@@ -572,6 +655,110 @@ Resources:
                       "statusCode": 500,
                       "headers": cors_headers,
                       "body": json.dumps({"error": f"Failed to retrieve configuration: {str(e)}"})
+                  }
+
+          def handle_put_default_model(event, context):
+              """Handle PUT /config/defaultModel - admin only."""
+              cors_headers = _cors_headers("PUT")
+
+              # Validate admin membership
+              username = _get_username_from_event(event)
+              if not username:
+                  return {
+                      "statusCode": 401,
+                      "headers": cors_headers,
+                      "body": json.dumps({"error": "Unable to identify user"})
+                  }
+
+              if not _is_admin(username):
+                  return {
+                      "statusCode": 403,
+                      "headers": cors_headers,
+                      "body": json.dumps({"error": "Access denied. Administrator group membership required."})
+                  }
+
+              # Parse and validate request body
+              try:
+                  body = json.loads(event.get("body", "{}"))
+              except (json.JSONDecodeError, TypeError):
+                  return {
+                      "statusCode": 400,
+                      "headers": cors_headers,
+                      "body": json.dumps({"error": "Invalid JSON in request body"})
+                  }
+
+              model_id = body.get("modelId", "").strip()
+              model_name = body.get("modelName", "").strip()
+              model_provider = body.get("modelProvider", "").strip()
+
+              if not model_id:
+                  return {
+                      "statusCode": 400,
+                      "headers": cors_headers,
+                      "body": json.dumps({"error": "modelId is required"})
+                  }
+
+              # Write to SSM Parameter Store
+              ssm = boto3.client("ssm")
+              prefix = os.environ["SSM_PREFIX"]
+
+              try:
+                  ssm.put_parameter(
+                      Name=f"{prefix}/bedrock/defaultModelId",
+                      Value=model_id,
+                      Type="String",
+                      Overwrite=True
+                  )
+
+                  if model_name:
+                      ssm.put_parameter(
+                          Name=f"{prefix}/bedrock/defaultModelName",
+                          Value=model_name,
+                          Type="String",
+                          Overwrite=True
+                      )
+
+                  if model_provider:
+                      ssm.put_parameter(
+                          Name=f"{prefix}/bedrock/defaultModelProvider",
+                          Value=model_provider,
+                          Type="String",
+                          Overwrite=True
+                      )
+
+                  return {
+                      "statusCode": 200,
+                      "headers": cors_headers,
+                      "body": json.dumps({
+                          "message": "Default model updated successfully",
+                          "modelId": model_id,
+                          "modelName": model_name,
+                          "modelProvider": model_provider
+                      })
+                  }
+              except Exception as e:
+                  print(f"Error updating SSM parameter: {e}")
+                  import traceback
+                  traceback.print_exc()
+                  return {
+                      "statusCode": 500,
+                      "headers": cors_headers,
+                      "body": json.dumps({"error": f"Failed to update default model: {str(e)}"})
+                  }
+
+          def lambda_handler(event, context):
+              http_method = event.get("httpMethod", "GET")
+              resource_path = event.get("resource", "")
+
+              if http_method == "GET" and resource_path == "/config":
+                  return handle_get(event, context)
+              elif http_method == "PUT" and resource_path == "/config/defaultModel":
+                  return handle_put_default_model(event, context)
+              else:
+                  return {
+                      "statusCode": 404,
+                      "headers": _cors_headers(),
+                      "body": json.dumps({"error": "Not found"})
                   }
 
   # Lambda permission for API Gateway invocation
@@ -706,6 +893,60 @@ Resources:
         TimeoutInMillis: 29000
 
   # ============================================================
+  # /config/defaultModel Resource and Methods (Admin only)
+  # ============================================================
+  ConfigDefaultModelResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      ParentId: !Ref ConfigResource
+      PathPart: defaultModel
+
+  # PUT /config/defaultModel - Cognito authorized, admin-only (validated in Lambda)
+  ConfigDefaultModelPutMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      ResourceId: !Ref ConfigDefaultModelResource
+      HttpMethod: PUT
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      ApiKeyRequired: false
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConfigLambda.Arn}/invocations"
+        TimeoutInMillis: 29000
+
+  # OPTIONS /config/defaultModel - CORS preflight, no auth
+  ConfigDefaultModelOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ConfigApiGateway
+      ResourceId: !Ref ConfigDefaultModelResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'PUT,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        PassthroughBehavior: WHEN_NO_MATCH
+        TimeoutInMillis: 29000
+
+  # ============================================================
   # Gateway Responses - CORS headers on error responses
   # ============================================================
   GatewayResponseDefault4XX:
@@ -716,7 +957,7 @@ Resources:
       ResponseParameters:
         gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
         gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
-        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,PUT,OPTIONS'"
 
   GatewayResponseDefault5XX:
     Type: AWS::ApiGateway::GatewayResponse
@@ -726,7 +967,7 @@ Resources:
       ResponseParameters:
         gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
         gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
-        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,PUT,OPTIONS'"
 
   # ============================================================
   # API Gateway Deployment and Stage
@@ -736,6 +977,8 @@ Resources:
     DependsOn:
       - ConfigGetMethod
       - ConfigOptionsMethod
+      - ConfigDefaultModelPutMethod
+      - ConfigDefaultModelOptionsMethod
       - GatewayResponseDefault4XX
       - GatewayResponseDefault5XX
     Properties:
@@ -842,3 +1085,9 @@ Outputs:
     Value: !Sub "https://${ConfigApiGateway}.execute-api.${AWS::Region}.amazonaws.com/v1/config"
     Export:
       Name: !Sub "${AWS::StackName}-ConfigApiEndpoint"
+
+  ConfigApiAdminEndpoint:
+    Description: "Config API admin endpoint URL for default model management"
+    Value: !Sub "https://${ConfigApiGateway}.execute-api.${AWS::Region}.amazonaws.com/v1/config/defaultModel"
+    Export:
+      Name: !Sub "${AWS::StackName}-ConfigApiAdminEndpoint"

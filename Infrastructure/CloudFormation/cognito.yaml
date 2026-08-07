@@ -44,6 +44,12 @@ Parameters:
     Type: String
     Description: S3 bucket for persona documents from Bedrock stack
   
+  # Config API Stack Outputs
+  ConfigApiStackName:
+    Type: String
+    Description: Stack name of the Config API stack (used for SSM parameter path scoping)
+    Default: ""
+
   # User-provided Parameters
   AllowedEmailDomain:
     Type: String
@@ -94,6 +100,7 @@ Resources:
       Environment:
         Variables:
           AllowedDomain: !Ref AllowedEmailDomain
+          LOG_LEVEL: WARN
       Handler: index.lambda_handler
       Role: !GetAtt PreSignUpRole.Arn
       Runtime: python3.13
@@ -105,15 +112,21 @@ Resources:
       Code:
         ZipFile: |
           import os
+          import logging
+
+          logger = logging.getLogger()
+          log_level = os.environ.get("LOG_LEVEL", "WARN").upper()
+          logger.setLevel(getattr(logging, log_level, logging.WARN))
+
           def lambda_handler(event, context):
             # It sets the user pool autoConfirmUser flag after validating the email domain
             event['response']['autoConfirmUser'] = False
         
-            print(event)
+            logger.info(event)
             # Split the email address so we can compare domains
             address = event['request']['userAttributes']['email'].split('@')
             
-            print(f"email address is {address}")
+            logger.info(f"email address is {address}")
         
             if address[1].lower() != os.environ["AllowedDomain"].lower():
               raise Exception("Not an allowed email domain.")
@@ -404,14 +417,44 @@ Resources:
         - Key: Purpose
           Value: UserPersonas
 
+  UserPreferences:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'UserPreferences-${AWS::StackName}-${AWS::Region}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userID
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref DynamoDBKMSKeyId
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Application
+          Value: ChatBot
+        - Key: Purpose
+          Value: UserPreferences
+
+  # ============================================================
+  # Cognito Administrator Group
+  # ============================================================
+  AdministratorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Administrator
+      UserPoolId: !Ref CognitoUserPool
+      Description: Administrators who can manage application-wide settings such as the default model
+      Precedence: 0
+
   DynamoDBAccessPolicy:
     Type: AWS::IAM::ManagedPolicy
-    DependsOn: 
-      - UserConversationHistory
-      - UserPersonas
     Properties:
-      ManagedPolicyName: !Sub '${AWS::StackName}-dynamodb-access-policy'
-      Description: 'Managed policy granting authenticated users access to their conversation history and persona tables'
+      Description: 'Managed policy granting authenticated users access to their conversation history, persona, and preferences tables'
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -428,6 +471,7 @@ Resources:
               - !GetAtt UserConversationHistory.Arn
               - !Sub '${UserConversationHistory.Arn}/index/*'
               - !GetAtt UserPersonas.Arn
+              - !GetAtt UserPreferences.Arn
       Roles:
         - !Ref UserAuthdRole
 
@@ -442,3 +486,5 @@ Outputs:
     Value: !Ref UserConversationHistory
   UserPersonasTable:
     Value: !Ref UserPersonas
+  UserPreferencesTable:
+    Value: !Ref UserPreferences

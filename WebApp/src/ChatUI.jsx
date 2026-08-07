@@ -9,17 +9,18 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
-import { ArrowUp, FileIcon, X, RefreshCw, Settings, Search, Check } from 'lucide-react';
+import { ArrowUp, FileIcon, X, RefreshCw, Settings, Search, Check, Star } from 'lucide-react';
 import { invokeBedrockAgent, invokeBedrockConverseStreamCommand, invokeBedrockRetrieveAndGenerateStreamCommand } from './bedrockAgent';
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import PersonaSelector from './PersonaSelector';
 import { PersonaService } from './PersonaService';
+import { UserPreferencesService } from './UserPreferencesService';
 import { sanitizeForLog } from './utils/sanitize';
 import ChatMessage from './ChatMessage';
 import KbStatusBanner from './KbStatusBanner';
 import './ChatUI.css';
 
-const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, setModelId, topNavModels, foundationModels, conversationHistory, setConversationHistory, username, navigationOpen, personaRefreshTrigger }, ref) => {
+const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, setModelId, topNavModels, foundationModels, conversationHistory, setConversationHistory, username, navigationOpen, personaRefreshTrigger, userPreferences, userEmail: parentUserEmail, onSetDefaultModel }, ref) => {
   const [currentSessionMessages, setCurrentSessionMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -219,15 +220,30 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
                       {filteredModelOptions.length === 0 ? (
                         <div className="px-3 py-2 text-sm text-muted-foreground">No models found</div>
                       ) : filteredModelOptions.map(m => (
-                        <button
-                          key={m.value}
-                          onClick={() => { setModelId(m.value); setModelPopoverOpen(false); setModelSearch(''); }}
-                          className={`w-full text-left px-3 py-1.5 text-sm rounded-sm flex items-center gap-2 transition-colors ${m.value === modelId ? 'bg-accent' : 'hover:bg-accent/50'}`}
-                        >
-                          <span className="flex-1">{m.label}</span>
-                          {m.detail && <span className="text-xs text-muted-foreground truncate max-w-[140px]">{m.detail}</span>}
-                          {m.value === modelId && <Check className="h-3.5 w-3.5 shrink-0" />}
-                        </button>
+                        <div key={m.value} className={`w-full text-left px-3 py-1.5 text-sm rounded-sm flex items-center gap-2 transition-colors ${m.value === modelId ? 'bg-accent' : 'hover:bg-accent/50'}`}>
+                          <button
+                            className="flex-1 flex items-center gap-2 text-left min-w-0"
+                            onClick={() => { setModelId(m.value); setModelPopoverOpen(false); setModelSearch(''); }}
+                          >
+                            <span className="flex-1 truncate">{m.label}</span>
+                            {m.detail && <span className="text-xs text-muted-foreground truncate max-w-[140px]">{m.detail}</span>}
+                            {m.value === modelId && <Check className="h-3.5 w-3.5 shrink-0" />}
+                          </button>
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                const fm = foundationModels?.find(f => f.modelId === m.value);
+                                await UserPreferencesService.saveDefaultModel(userEmail || parentUserEmail, m.value, m.label, fm?.providerName || '', credentials);
+                                if (onSetDefaultModel) onSetDefaultModel(m.value);
+                              } catch (err) { console.error('Failed to set default model:', err); }
+                            }}
+                            className={`shrink-0 p-0.5 rounded transition-colors ${userPreferences?.defaultModelId === m.value ? 'text-yellow-500' : 'text-muted-foreground/40 hover:text-yellow-500'}`}
+                            title={userPreferences?.defaultModelId === m.value ? 'Your default model' : 'Set as my default'}
+                          >
+                            <Star className="h-3.5 w-3.5" fill={userPreferences?.defaultModelId === m.value ? 'currentColor' : 'none'} />
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </PopoverContent>

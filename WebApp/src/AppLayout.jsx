@@ -9,16 +9,19 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuLabel, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Moon, Sun, Upload, Globe, RefreshCw, FileText, Users, PanelLeftClose, PanelLeft, ExternalLink, User, LogOut, Trash2, Clock, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
+import { Moon, Sun, Upload, Globe, RefreshCw, FileText, Users, PanelLeftClose, PanelLeft, ExternalLink, User, LogOut, Trash2, Clock, ArrowUpRight, ArrowDownLeft, Shield } from 'lucide-react';
 import ChatUI from './ChatUI';
 import S3Upload from './S3Upload';
 import WebsiteCrawler from './WebsiteCrawler';
 import PersonaManager from './PersonaManager';
 import KbSync from './KbSync';
 import AgentInstructions from './AgentInstructions';
+import AdminSettings from './AdminSettings';
 import { bedrockConfig, config } from './aws-config';
 import { convHistory } from './ConvHistory';
 import { getBedrockModels } from './bedrockAgent';
+import { UserPreferencesService } from './UserPreferencesService';
+import { AdminService } from './AdminService';
 import AWS_Logo from './images/AWS.png';
 import AWS_Logo_Light from './images/AWS_Light.png';
 import './Layout.css';
@@ -38,6 +41,8 @@ function Layout() {
   const [conversationHistory, setConversationHistory] = useState([]);
   const [mode, setMode] = useState('dark');
   const [personaRefreshTrigger, setPersonaRefreshTrigger] = useState(0);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [userPreferences, setUserPreferences] = useState(null);
   const chatUIRef = useRef(null);
 
   const filteredChatTypes = useMemo(() => ragEnabled ? chatTypes : chatTypes.filter(t => t.id !== 'RAG'), [chatTypes, ragEnabled]);
@@ -52,6 +57,26 @@ function Layout() {
   useEffect(() => { document.documentElement.classList.add('dark'); }, []);
 
   const handlePersonaChange = () => setPersonaRefreshTrigger(prev => prev + 1);
+
+  // Called when admin updates the system-wide default model
+  const handleAdminModelChange = (newModelId) => {
+    // If the current user has no personal override, update their active model to the new admin default
+    if (!userPreferences?.defaultModelId) {
+      setModelId(newModelId);
+    }
+  };
+
+  // Called when user updates their personal default model
+  const handleUserModelChange = (newModelId) => {
+    if (newModelId) {
+      setModelId(newModelId);
+      setUserPreferences(prev => ({ ...prev, defaultModelId: newModelId }));
+    } else {
+      // User cleared their preference, fall back to admin/system default
+      setModelId(bedrockConfig.defaultModelId);
+      setUserPreferences(prev => ({ ...prev, defaultModelId: '' }));
+    }
+  };
 
   const loadSessionHistory = async (sessionID, userID) => {
     try {
@@ -86,6 +111,31 @@ function Layout() {
       } catch {}
     })();
   }, [credentials]);
+
+  // Load user preferences and resolve effective default model
+  useEffect(() => {
+    if (!credentials || !email) return;
+    (async () => {
+      try {
+        // Check admin status from cached config
+        setIsAdmin(AdminService.isAdmin());
+
+        // Load user preferences from DynamoDB
+        const prefs = await UserPreferencesService.getUserPreferences(email, credentials);
+        setUserPreferences(prefs);
+
+        // Resolve effective model: user preference > admin default (SSM/bedrockConfig) > deploy-time default
+        if (prefs?.defaultModelId) {
+          setModelId(prefs.defaultModelId);
+        }
+        // If no user preference, modelId already defaults to bedrockConfig.defaultModelId (set in useState)
+      } catch (err) {
+        if (config.debug) {
+          console.error('Error loading user preferences:', err);
+        }
+      }
+    })();
+  }, [credentials, email]);
 
   useEffect(() => {
     (async () => {
@@ -154,7 +204,7 @@ function Layout() {
           <aside className="w-[280px] bg-card flex flex-col shrink-0 overflow-hidden">
             <ScrollArea className="flex-1">
               <div className="p-3 space-y-4">
-                {ragEnabled && (
+                {isAdmin && ragEnabled && (
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Knowledge Base</p>
                     <div className="space-y-1">
@@ -164,10 +214,15 @@ function Layout() {
                     </div>
                   </div>
                 )}
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Agent Configuration</p>
-                  <button onClick={() => setActiveModal('instructions')} className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-accent transition-colors text-left"><FileText className="h-4 w-4" />Update Agent Instructions</button>
-                </div>
+                {isAdmin && (
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Administration</p>
+                    <div className="space-y-1">
+                      <button onClick={() => setActiveModal('instructions')} className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-accent transition-colors text-left"><FileText className="h-4 w-4" />Update Agent Instructions</button>
+                      <button onClick={() => setActiveModal('adminSettings')} className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-accent transition-colors text-left"><Shield className="h-4 w-4" />System Default Model</button>
+                    </div>
+                  </div>
+                )}
                 <div>
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Personas</p>
                   <button onClick={() => setActiveModal('personas')} className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-accent transition-colors text-left"><Users className="h-4 w-4" />Manage AI Personas</button>
@@ -204,7 +259,7 @@ function Layout() {
         {/* Main Content */}
         <main className="flex-1 overflow-auto" style={{ maxHeight: 'calc(100vh - 48px)' }}>
           <div className="p-4 h-full">
-            <ChatUI ref={chatUIRef} chatType={chatType} setChatType={setChatType} chatTypes={filteredChatTypes} modelId={modelId} setModelId={setModelId} topNavModels={topNavModels} foundationModels={foundationModels} conversationHistory={conversationHistory} setConversationHistory={setConversationHistory} username={username} navigationOpen={navigationOpen} personaRefreshTrigger={personaRefreshTrigger} />
+            <ChatUI ref={chatUIRef} chatType={chatType} setChatType={setChatType} chatTypes={filteredChatTypes} modelId={modelId} setModelId={setModelId} topNavModels={topNavModels} foundationModels={foundationModels} conversationHistory={conversationHistory} setConversationHistory={setConversationHistory} username={username} navigationOpen={navigationOpen} personaRefreshTrigger={personaRefreshTrigger} userPreferences={userPreferences} userEmail={email} onSetDefaultModel={handleUserModelChange} />
           </div>
         </main>
       </div>
@@ -215,6 +270,7 @@ function Layout() {
       <Dialog open={activeModal === 'instructions'} onOpenChange={(open) => !open && setActiveModal(null)}><DialogContent><DialogHeader><DialogTitle>Update Bedrock Agent Instructions</DialogTitle></DialogHeader><AgentInstructions /></DialogContent></Dialog>
       <Dialog open={activeModal === 'crawl'} onOpenChange={(open) => !open && setActiveModal(null)}><DialogContent size="large"><DialogHeader><DialogTitle>Add Website to Knowledge Base</DialogTitle></DialogHeader><WebsiteCrawler /></DialogContent></Dialog>
       <Dialog open={activeModal === 'personas'} onOpenChange={(open) => !open && setActiveModal(null)}><DialogContent size="max"><DialogHeader><DialogTitle>Manage AI Personas</DialogTitle></DialogHeader><PersonaManager onPersonasChange={handlePersonaChange} /></DialogContent></Dialog>
+      <Dialog open={activeModal === 'adminSettings'} onOpenChange={(open) => !open && setActiveModal(null)}><DialogContent><DialogHeader><DialogTitle>Admin: System Default Model</DialogTitle></DialogHeader><AdminSettings topNavModels={topNavModels} foundationModels={foundationModels} onModelChange={handleAdminModelChange} onClose={() => setActiveModal(null)} /></DialogContent></Dialog>
     </div>
   );
 }
