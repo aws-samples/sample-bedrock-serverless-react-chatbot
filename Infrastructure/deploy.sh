@@ -44,9 +44,11 @@ detect_region() {
     # GovCloud regions follow the pattern: us-gov-*
     if [[ "$REGION" == us-gov-* ]]; then
         IS_GOVCLOUD=true
+        AWS_PARTITION="aws-us-gov"
         echo "Detected GovCloud region: $REGION"
     else
         IS_GOVCLOUD=false
+        AWS_PARTITION="aws"
         echo "Detected commercial AWS region: $REGION"
     fi
     
@@ -1194,6 +1196,7 @@ COGNITO_USER_POOL_CLIENT_ID=$(get_stack_output "$STACK_NAME-cognito" "CognitoUse
 COGNITO_IDENTITY_POOL_ID=$(get_stack_output "$STACK_NAME-cognito" "CognitoIdentityPoolId")
 USER_CONV_HIST_TABLE=$(get_stack_output "$STACK_NAME-cognito" "UserConHistTable")
 USER_PERSONAS_TABLE=$(get_stack_output "$STACK_NAME-cognito" "UserPersonasTable")
+USER_PREFERENCES_TABLE=$(get_stack_output "$STACK_NAME-cognito" "UserPreferencesTable")
 
 echo "Cognito stack outputs:"
 echo "  User Pool ID: $COGNITO_USER_POOL_ID"
@@ -1218,6 +1221,8 @@ CONFIG_API_PARAMS=(
   "LambdaDLQArn=$LAMBDA_DLQ_ARN"
   "CognitoUserPoolId=$COGNITO_USER_POOL_ID"
   "CognitoUserPoolClientId=$COGNITO_USER_POOL_CLIENT_ID"
+  "CognitoUserPoolArn=arn:${AWS_PARTITION:-aws}:cognito-idp:${REGION}:${ACCOUNT_ID}:userpool/${COGNITO_USER_POOL_ID}"
+  "UserPreferencesTable=$USER_PREFERENCES_TABLE"
   "BedrockAgentId=$AGENT_ID"
   "BedrockAgentAliasId=$AGENT_ALIAS_ID"
   "BedrockAgentName=$AGENT_NAME"
