@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
 import { ArrowUp, FileIcon, X, RefreshCw, Settings, Search, Check, Star } from 'lucide-react';
-import { invokeBedrockAgent, invokeBedrockConverseStreamCommand, invokeBedrockRetrieveAndGenerateStreamCommand } from './bedrockAgent';
+import { invokeBedrockAgent, invokeBedrockConverseStreamCommand, invokeBedrockRetrieveAndGenerateStreamCommand, getEffortLevelsForModel } from './bedrockAgent';
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import PersonaSelector from './PersonaSelector';
 import { PersonaService } from './PersonaService';
@@ -24,6 +24,7 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
   const [currentSessionMessages, setCurrentSessionMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState('Generating response');
   const [chatSessionId, setChatSessionId] = useState(() => Array(4).fill(0).map(() => Math.random().toString(36).substring(2)).join(''));
   const [ragSessionId, setRagSessionId] = useState('');
   const [files, setFiles] = useState([]);
@@ -34,6 +35,16 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
   const [userEmail, setUserEmail] = useState('');
   const [modelSearch, setModelSearch] = useState('');
   const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
+  const [effortLevel, setEffortLevel] = useState('high');
+  const effortLevels = useMemo(() => getEffortLevelsForModel(modelId), [modelId]);
+  const supportsEffort = effortLevels.length > 0;
+  // If the user switches to a model that doesn't offer the currently-selected
+  // effort level (e.g. moving from Opus 5 with "xhigh" back to Sonnet 4.5, or to
+  // a model with a shorter list), fall back to "high" so we never send a value
+  // the model would reject with a ValidationException.
+  useEffect(() => {
+    if (supportsEffort && !effortLevels.includes(effortLevel)) setEffortLevel('high');
+  }, [supportsEffort, effortLevels, effortLevel]);
   const chatContainerRef = useRef(null);
   const credentials = useContext(CredentialsContext);
   const fileInputRef = useRef(null);
@@ -88,26 +99,64 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
     }
     const allFiles = [...files, ...personaFiles];
     setCurrentSessionMessages(prev => [...prev, { role: 'user', content: [{ text: input }], timestamp: Date.now() }]);
-    const savedInput = input; setInput(''); setIsLoading(true);
+    const savedInput = input; setInput(''); setIsLoading(true); setLoadingText('Generating response');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    // Reasoning-capable models (e.g. Opus 5) do their reasoning server-side and
+    // send nothing for many seconds before the first stream event. Bedrock does
+    // not surface that reasoning as text on the wire, so we fall back to a
+    // client-side timer: if nothing has arrived within 1.5s, flip the indicator
+    // to "Thinking" so the wait doesn't look like a stall.
+    const thinkingTimer = setTimeout(() => setLoadingText('Thinking'), 1500);
+    // Fast models can emit >100 chunks/sec. Committing each one to React state
+    // triggers a full ReactMarkdown re-parse of the entire growing response,
+    // which is O(n^2) over the stream and shows up as stutter on newer models.
+    // Batch chunks through requestAnimationFrame so React re-renders at most
+    // once per display frame; a final flush after the stream ends ensures no
+    // trailing text is dropped. Declared outside the try so the catch/finally
+    // can cancel any in-flight frame if the stream errors partway through.
+    let streamedResponse = '';
+    let firstChunkSeen = false;
+    let pendingFrame = null;
+    const flushStreamedResponse = () => {
+      pendingFrame = null;
+      setCurrentSessionMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.role === 'assistant') return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: [{ text: streamedResponse }] } : m);
+        return [...prev, { role: 'assistant', content: [{ text: streamedResponse }], timestamp: Date.now() }];
+      });
+    };
     try {
       if (!modelId) throw new Error('Model ID is required');
       const formattedHistory = currentSessionMessages.map(msg => ({ role: msg.role, content: [{ text: msg.content[0].text }] }));
-      let streamedResponse = '', result, citations = [], usageData = null;
-      const onChunk = (chunk) => { setIsLoading(false); streamedResponse += chunk; setCurrentSessionMessages(prev => { const last = prev[prev.length - 1]; if (last?.role === 'assistant') return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: [{ text: streamedResponse }] } : m); return [...prev, { role: 'assistant', content: [{ text: streamedResponse }], timestamp: Date.now() }]; }); };
+      let result, citations = [], usageData = null;
+      const onChunk = (chunk) => {
+        if (!firstChunkSeen) {
+          firstChunkSeen = true;
+          clearTimeout(thinkingTimer);
+          setLoadingText('Generating response');
+          setIsLoading(false);
+        }
+        streamedResponse += chunk;
+        if (pendingFrame === null) pendingFrame = requestAnimationFrame(flushStreamedResponse);
+      };
+      // Reasoning deltas (when they carry text) also flip the indicator immediately.
+      const onReasoning = () => { clearTimeout(thinkingTimer); setLoadingText('Thinking'); };
       if (chatType === 'RAG') {
         const supportsStreaming = (modelId === bedrockConfig.defaultModelId && bedrockConfig.defaultModelStream) || getModelItem(foundationModels, modelId, 'responseStreamingSupported');
-        if (supportsStreaming) { result = await invokeBedrockRetrieveAndGenerateStreamCommand(savedInput, allFiles, ragSessionId, credentials, modelId, formattedHistory, onChunk, personaPrompt || null); if (result.fullResponse?.metrics) usageData = { inputTokens: result.fullResponse.metrics.inputTokenCount || 0, outputTokens: result.fullResponse.metrics.outputTokenCount || 0 }; }
+        if (supportsStreaming) { result = await invokeBedrockRetrieveAndGenerateStreamCommand(savedInput, allFiles, ragSessionId, credentials, modelId, formattedHistory, onChunk, personaPrompt || null, onReasoning, supportsEffort ? effortLevel : null); if (result.fullResponse?.metrics) usageData = { inputTokens: result.fullResponse.metrics.inputTokenCount || 0, outputTokens: result.fullResponse.metrics.outputTokenCount || 0 }; }
         else { result = await invokeBedrockAgent(enhancedInput, chatSessionId, credentials, []); }
         setRagSessionId(result.sessionId); citations = result.citations || [];
         if (citations.length > 0) setCurrentSessionMessages(prev => { const last = prev[prev.length - 1]; if (last?.role === 'assistant') return prev.map((m, i) => i === prev.length - 1 ? { ...m, citations } : m); return prev; });
       } else if (chatType === 'LLM') {
-        const response = await invokeBedrockConverseStreamCommand(savedInput, allFiles, credentials, modelId, formattedHistory, onChunk, personaPrompt || null);
+        const response = await invokeBedrockConverseStreamCommand(savedInput, allFiles, credentials, modelId, formattedHistory, onChunk, personaPrompt || null, onReasoning, supportsEffort ? effortLevel : null);
         if (response?.usage) usageData = { inputTokens: response.usage.inputTokens || 0, outputTokens: response.usage.outputTokens || 0 };
       } else if (chatType === 'Agentic') {
         const d = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
         result = await invokeBedrockAgent('Current date: ' + d + '\n\n' + enhancedInput, chatSessionId, credentials, onChunk);
       }
+      // Force a final synchronous flush so the last few tokens land before we
+      // persist or replace the streaming message on save.
+      if (pendingFrame !== null) { cancelAnimationFrame(pendingFrame); flushStreamedResponse(); }
       try {
         const attrs = await fetchUserAttributes();
         const inTok = usageData ? usageData.inputTokens : Math.ceil(savedInput.length / 4);
@@ -117,8 +166,8 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
         setCurrentSessionMessages(prev => prev.map((m, i) => i === prev.length - 1 && m.role === 'assistant' ? { ...m, timestamp: ts } : m));
         setConversationHistory(await convHistory.loadUserHistory(attrs.email, credentials));
       } catch {}
-    } catch (error) { setIsLoading(false); setCurrentSessionMessages(prev => [...prev, { role: 'assistant', content: [{ text: 'Sorry, an error occurred: ' + sanitizeForLog(error.message) }], timestamp: Date.now() }]); }
-    finally { setIsLoading(false); }
+    } catch (error) { clearTimeout(thinkingTimer); if (pendingFrame !== null) { cancelAnimationFrame(pendingFrame); pendingFrame = null; } setIsLoading(false); setCurrentSessionMessages(prev => [...prev, { role: 'assistant', content: [{ text: 'Sorry, an error occurred: ' + sanitizeForLog(error.message) }], timestamp: Date.now() }]); }
+    finally { clearTimeout(thinkingTimer); setIsLoading(false); }
   };
   const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } };
   const newSession = () => { setCurrentSessionMessages([]); setChatSessionId(newSessionId()); setInput(''); setFiles([]); setSelectedPersonaId('default'); };
@@ -163,7 +212,7 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
                 <ChatMessage key={index + '-' + message.timestamp} message={message} username={username} userInitials={userInitials} userEmail={userEmail} credentials={credentials} sessionId={chatSessionId} modelId={modelId} />
               ))}
               {isLoading && (
-                <div className="rounded-lg px-4 py-3"><span className="text-sm text-muted-foreground">Generating response <span className="bouncing-dots"><span></span><span></span><span></span></span></span></div>
+                <div className="rounded-lg px-4 py-3"><span className="text-sm text-muted-foreground">{loadingText} <span className="bouncing-dots"><span></span><span></span><span></span></span></span></div>
               )}
             </div>
           </div>
@@ -196,9 +245,21 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
                 <button type="button" className="prompt-icon-btn" onClick={() => fileInputRef.current?.click()} title="Attach files">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
                 </button>
-                <input ref={fileInputRef} type="file" multiple accept=".txt,.pdf,.doc,.docx,.csv,.md,.html,.xls,.xlsx,.png,.jpeg,.jpg,.gif,.webp,image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={(e) => { setFiles(prev => [...prev, ...Array.from(e.target.files)]); e.target.value = ''; }} />
+                <input ref={fileInputRef} type="file" multiple accept=".txt,.pdf,.doc,.docx,.csv,.md,.html,.xls,.xlsx,.png,.jpeg,.jpg,.gif,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,text/markdown,text/html,image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={(e) => { setFiles(prev => [...prev, ...Array.from(e.target.files)]); e.target.value = ''; }} />
               </div>
               <div className="prompt-toolbar-right">
+                {supportsEffort && (
+                  <Select value={effortLevel} onValueChange={setEffortLevel}>
+                    <SelectTrigger className="h-7 text-xs px-2 border-none bg-transparent hover:bg-accent/50 gap-1 w-auto text-muted-foreground" title="Reasoning effort — lower = faster, higher = deeper thinking">
+                      <span className="text-xs">Effort: <SelectValue /></span>
+                    </SelectTrigger>
+                    <SelectContent align="end">
+                      {effortLevels.map((lvl) => (
+                        <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
                 <Popover open={modelPopoverOpen} onOpenChange={(open) => { setModelPopoverOpen(open); if (!open) setModelSearch(''); }}>
                   <PopoverTrigger asChild>
                     <button className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 rounded-md max-w-[180px] sm:max-w-none">
