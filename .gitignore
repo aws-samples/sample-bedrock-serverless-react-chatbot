@@ -11,3 +11,4 @@ Infrastructure/vpc-config.json
 .vite/
 .holmes
 acat-filters
+.protoshield/

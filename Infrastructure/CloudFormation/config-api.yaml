@@ -98,6 +98,14 @@ Parameters:
     Type: String
     Description: Default prompt template for knowledge base retrieval (MUST include $output_format_instructions$ for citations)
     Default: "You are a helpful assistant. Use the following context from the knowledge base to answer the question.\n\n$search_results$\n\nQuestion: $query$\n\nInstructions:\n- Answer the question based on the context provided above\n- If the information needed to answer the question is not found in the context, respond with: \"Sorry, I don't have information in my knowledge base to answer that question.\"\n- Be accurate and provide as much supporting information as possible in your responses\n\n$output_format_instructions$"
+  BedrockEffortLevels:
+    Type: String
+    Description: >-
+      JSON map of Anthropic Claude model IDs to supported output_config.effort levels.
+      Format: {"claude-opus-5":["low","medium","high","xhigh","max"],...}.
+      Used to populate the effort picker and validate user selections.
+      Keep synchronized with https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-adaptive-thinking.html
+    Default: '{"claude-fable-5":["low","medium","high","xhigh","max"],"claude-mythos-5":["low","medium","high","xhigh","max"],"claude-mythos-preview":["low","medium","high","max"],"claude-opus-5":["low","medium","high","xhigh","max"],"claude-opus-4-7":["low","medium","high","max"],"claude-opus-4-6":["low","medium","high","xhigh","max"],"claude-sonnet-5":["low","medium","high"],"claude-sonnet-4-6":["low","medium","high","max"]}'
 
   # DynamoDB Parameters (2)
   ConvHistoryTable:
@@ -306,6 +314,14 @@ Resources:
       Name: !Sub /${AWS::StackName}/bedrock/defaultPrompt
       Type: String
       Value: !Ref BedrockDefaultPrompt
+
+  SSMBedrockEffortLevels:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${AWS::StackName}/bedrock/effortLevels
+      Type: String
+      Value: !Ref BedrockEffortLevels
+      Description: "JSON map of Anthropic Claude model effort levels (output_config.effort)"
 
   SSMBedrockRagEnabled:
     Type: AWS::SSM::Parameter
@@ -621,7 +637,8 @@ Resources:
                           "guardrailVersion": _val(params, "bedrock/guardrailVersion"),
                           "defaultPrompt": _val(params, "bedrock/defaultPrompt"),
                           "ragEnabled": _val(params, "bedrock/ragEnabled"),
-                          "vectorStore": _val(params, "bedrock/vectorStore")
+                          "vectorStore": _val(params, "bedrock/vectorStore"),
+                          "effortLevels": _val(params, "bedrock/effortLevels")
                       },
                       "dynamoConfig": {
                           "region": region,

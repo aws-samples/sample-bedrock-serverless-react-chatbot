@@ -35,6 +35,7 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
   const [userEmail, setUserEmail] = useState('');
   const [modelSearch, setModelSearch] = useState('');
   const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
+  const [effortPopoverOpen, setEffortPopoverOpen] = useState(false);
   const [effortLevel, setEffortLevel] = useState('high');
   const effortLevels = useMemo(() => getEffortLevelsForModel(modelId), [modelId]);
   const supportsEffort = effortLevels.length > 0;
@@ -249,16 +250,27 @@ const ChatUI = React.forwardRef(({ chatType, setChatType, chatTypes, modelId, se
               </div>
               <div className="prompt-toolbar-right">
                 {supportsEffort && (
-                  <Select value={effortLevel} onValueChange={setEffortLevel}>
-                    <SelectTrigger className="h-7 text-xs px-2 border-none bg-transparent hover:bg-accent/50 gap-1 w-auto text-muted-foreground" title="Reasoning effort — lower = faster, higher = deeper thinking">
-                      <span className="text-xs">Effort: <SelectValue /></span>
-                    </SelectTrigger>
-                    <SelectContent align="end">
-                      {effortLevels.map((lvl) => (
-                        <SelectItem key={lvl} value={lvl}>{lvl}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Popover open={effortPopoverOpen} onOpenChange={setEffortPopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <button className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 rounded-md" title="Reasoning effort — lower = faster, higher = deeper thinking">
+                        <span className="truncate">Effort: {effortLevel}</span> <svg className="shrink-0" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2.5 4L5 6.5L7.5 4" /></svg>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[180px] p-0" align="end">
+                      <div className="max-h-60 overflow-y-auto p-1">
+                        {effortLevels.map((lvl) => (
+                          <button
+                            key={lvl}
+                            className={`w-full text-left px-3 py-1.5 text-sm rounded-sm flex items-center gap-2 transition-colors ${lvl === effortLevel ? 'bg-accent' : 'hover:bg-accent/50'}`}
+                            onClick={() => { setEffortLevel(lvl); setEffortPopoverOpen(false); }}
+                          >
+                            <span className="flex-1">{lvl}</span>
+                            {lvl === effortLevel && <Check className="h-3.5 w-3.5 shrink-0" />}
+                          </button>
+                        ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 )}
                 <Popover open={modelPopoverOpen} onOpenChange={(open) => { setModelPopoverOpen(open); if (!open) setModelSearch(''); }}>
                   <PopoverTrigger asChild>

@@ -49,30 +49,120 @@ export const parameters = {
 // sync when new models ship. Detection strips the inference-profile prefix
 // (us./eu./apac./global.) so `us.anthropic.claude-opus-5` matches `claude-opus-5`.
 // https://platform.claude.com/docs/en/build-with-claude/effort
-const EFFORT_LEVELS_BY_MODEL = {
+//
+// This hardcoded map serves as the fallback when bedrockConfig.effortLevels is not
+// available (e.g., older deployments or config fetch failure). The runtime map from
+// SSM Parameter Store takes precedence.
+const EFFORT_LEVELS_BY_MODEL_FALLBACK = {
   'claude-fable-5':           ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-mythos-5':          ['low', 'medium', 'high', 'xhigh', 'max'],
   'claude-mythos-preview':    ['low', 'medium', 'high', 'max'],
   'claude-opus-5':            ['low', 'medium', 'high', 'xhigh', 'max'],
-  'claude-opus-4-8':          ['low', 'medium', 'high', 'xhigh', 'max'],
-  'claude-opus-4-7':          ['low', 'medium', 'high', 'xhigh', 'max'],
-  'claude-opus-4-6':          ['low', 'medium', 'high', 'max'],
-  'claude-sonnet-5':          ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-opus-4-7':          ['low', 'medium', 'high', 'max'],
+  'claude-opus-4-6':          ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-sonnet-5':          ['low', 'medium', 'high'],
   'claude-sonnet-4-6':        ['low', 'medium', 'high', 'max'],
-  'claude-opus-4-5-20251101': ['low', 'medium', 'high'],
 };
 
+// Session-level cache of models that rejected a specific effort level with ValidationException.
+// Shape: { modelId: Set<effort> } — prevents re-attempting known-invalid combinations within
+// the same browser session after runtime correction.
+const effortRejectionCache = {};
+
+// Bedrock inference-profile IDs are `<partition>.<provider>.<model>` — commercial
+// uses `us.` / `eu.` / `apac.` / `global.`; GovCloud uses `us-gov.`. Order the
+// alternation with `us-gov` before `us` so the regex takes the longer prefix when
+// both would nominally match (though `us-gov.` won't be matched by `us\.` anyway
+// because the following char is `-` not `.`, keeping this here defensively).
 const stripInferenceProfilePrefix = (id) =>
-  (id || '').replace(/^(us|eu|apac|global)\./, '').replace(/^anthropic\./, '');
+  (id || '').replace(/^(us-gov|us|eu|apac|global)\./, '').replace(/^anthropic\./, '');
 
 export const getEffortLevelsForModel = (modelId) => {
   const stripped = stripInferenceProfilePrefix(modelId);
+
+  // Primary: Parse runtime config from SSM (JSON string). The aws-config.js Proxy returns
+  // '' for absent keys, so check for truthy before parsing.
+  let runtimeMap = null;
+  try {
+    const effortLevelsJson = bedrockConfig.effortLevels;
+    if (effortLevelsJson) {
+      runtimeMap = JSON.parse(effortLevelsJson);
+    }
+  } catch (e) {
+    console.warn('Failed to parse bedrockConfig.effortLevels, falling back to hardcoded map:', e.message);
+  }
+
+  const sourceMap = runtimeMap || EFFORT_LEVELS_BY_MODEL_FALLBACK;
+
   // Match the longest key (versioned IDs like claude-opus-4-5-20251101 win over
   // shorter prefixes if we ever add both).
-  const key = Object.keys(EFFORT_LEVELS_BY_MODEL)
+  const key = Object.keys(sourceMap)
     .filter((k) => stripped.startsWith(k))
     .sort((a, b) => b.length - a.length)[0];
-  return key ? EFFORT_LEVELS_BY_MODEL[key] : [];
+  
+  const allLevels = key ? sourceMap[key] : [];
+
+  // Filter out any effort levels that this model has rejected in this session
+  const rejectedLevels = effortRejectionCache[modelId] || new Set();
+  return allLevels.filter(level => !rejectedLevels.has(level));
+};
+
+/**
+ * Record that a specific model rejected a specific effort level with ValidationException.
+ * Used to prevent re-attempting known-invalid combinations in the same session.
+ * @param {string} modelId - The model identifier
+ * @param {string} effort - The effort level that was rejected
+ */
+const recordEffortRejection = (modelId, effort) => {
+  if (!effortRejectionCache[modelId]) {
+    effortRejectionCache[modelId] = new Set();
+  }
+  effortRejectionCache[modelId].add(effort);
+  console.warn(`[effort] Model ${modelId} rejected effort=${effort}, cached for this session`);
+};
+
+/**
+ * Send a Bedrock command with automatic effort-level retry on ValidationException.
+ * If the initial command fails with ValidationException and additionalModelRequestFields
+ * contains output_config.effort, retries once with effort removed (falling back to the
+ * server-side default adaptive thinking with "high" effort).
+ * 
+ * @param {BedrockRuntimeClient} client - Configured Bedrock client
+ * @param {Command} command - ConverseCommand or ConverseStreamCommand
+ * @param {string} modelId - Model identifier for logging/caching
+ * @param {object} commandInput - Original command input (for reconstructing retry)
+ * @param {CommandConstructor} CommandClass - ConverseCommand or ConverseStreamCommand class
+ * @returns {Promise} Command response
+ */
+const sendWithEffortRetry = async (client, command, modelId, commandInput, CommandClass) => {
+  try {
+    return await client.send(command);
+  } catch (error) {
+    // Only retry on ValidationException where effort was provided
+    const isValidationError = error.name === 'ValidationException' || error.__type === 'ValidationException';
+    const hadEffort = commandInput.additionalModelRequestFields?.output_config?.effort;
+
+    if (isValidationError && hadEffort) {
+      const attemptedEffort = commandInput.additionalModelRequestFields.output_config.effort;
+      console.warn(
+        `[effort] ValidationException from ${modelId} with effort=${attemptedEffort}. ` +
+        `Retrying with adaptive thinking (server default "high"). Error: ${error.message}`
+      );
+
+      // Cache the rejection
+      recordEffortRejection(modelId, attemptedEffort);
+
+      // Rebuild command without effort
+      const retryInput = { ...commandInput };
+      delete retryInput.additionalModelRequestFields;
+
+      const retryCommand = new CommandClass(retryInput);
+      return await client.send(retryCommand);
+    }
+
+    // Non-ValidationException or no effort to strip — rethrow
+    throw error;
+  }
 };
 
 export const modelSupportsEffort = (modelId) => getEffortLevelsForModel(modelId).length > 0;
@@ -525,7 +615,7 @@ $output_format_instructions`;
     }
 
     const command = new RetrieveAndGenerateStreamCommand(input);
-    const response = await bedrockClient.send(command);
+    const response = await sendWithEffortRetry(bedrockClient, command, modelId, input, RetrieveAndGenerateStreamCommand);
     
     let responseText = '';
     let citations = [];
@@ -833,7 +923,7 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
     };
     console.log('[stream-diag] sending ConverseStream', { modelId, guardrail: !!commandInput.guardrailConfig });
 
-    const response = await bedrockClient.send(command);
+    const response = await sendWithEffortRetry(bedrockClient, command, modelId, commandInput, ConverseStreamCommand);
     streamDiag.responseAt = performance.now();
     console.log('[stream-diag] response handle received', {
       modelId,
