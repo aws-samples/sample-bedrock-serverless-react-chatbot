@@ -39,9 +39,133 @@ import { toCanonicalS3Uri } from './utils/s3Uri';
  * @param {string} sessionId - An arbitrary identifier for the session.
  */
 
-export const parameters = { 
+export const parameters = {
   modelId: null, instruction: null, modelupdated: false, instructionUpdated: false
 };
+
+// Anthropic's `output_config.effort` parameter is model-specific and not advertised
+// by any Bedrock API (GetFoundationModel/ListFoundationModels don't surface it).
+// Support and available levels come from Anthropic's effort docs; keep this list in
+// sync when new models ship. Detection strips the inference-profile prefix
+// (us./eu./apac./global.) so `us.anthropic.claude-opus-5` matches `claude-opus-5`.
+// https://platform.claude.com/docs/en/build-with-claude/effort
+//
+// This hardcoded map serves as the fallback when bedrockConfig.effortLevels is not
+// available (e.g., older deployments or config fetch failure). The runtime map from
+// SSM Parameter Store takes precedence.
+const EFFORT_LEVELS_BY_MODEL_FALLBACK = {
+  'claude-fable-5':           ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-mythos-5':          ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-mythos-preview':    ['low', 'medium', 'high', 'max'],
+  'claude-opus-5':            ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-opus-4-7':          ['low', 'medium', 'high', 'max'],
+  'claude-opus-4-6':          ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-sonnet-5':          ['low', 'medium', 'high'],
+  'claude-sonnet-4-6':        ['low', 'medium', 'high', 'max'],
+};
+
+// Session-level cache of models that rejected a specific effort level with ValidationException.
+// Shape: { modelId: Set<effort> } — prevents re-attempting known-invalid combinations within
+// the same browser session after runtime correction.
+const effortRejectionCache = {};
+
+// Bedrock inference-profile IDs are `<partition>.<provider>.<model>` — commercial
+// uses `us.` / `eu.` / `apac.` / `global.`; GovCloud uses `us-gov.`. Order the
+// alternation with `us-gov` before `us` so the regex takes the longer prefix when
+// both would nominally match (though `us-gov.` won't be matched by `us\.` anyway
+// because the following char is `-` not `.`, keeping this here defensively).
+const stripInferenceProfilePrefix = (id) =>
+  (id || '').replace(/^(us-gov|us|eu|apac|global)\./, '').replace(/^anthropic\./, '');
+
+export const getEffortLevelsForModel = (modelId) => {
+  const stripped = stripInferenceProfilePrefix(modelId);
+
+  // Primary: Parse runtime config from SSM (JSON string). The aws-config.js Proxy returns
+  // '' for absent keys, so check for truthy before parsing.
+  let runtimeMap = null;
+  try {
+    const effortLevelsJson = bedrockConfig.effortLevels;
+    if (effortLevelsJson) {
+      runtimeMap = JSON.parse(effortLevelsJson);
+    }
+  } catch (e) {
+    console.warn('Failed to parse bedrockConfig.effortLevels, falling back to hardcoded map:', e.message);
+  }
+
+  const sourceMap = runtimeMap || EFFORT_LEVELS_BY_MODEL_FALLBACK;
+
+  // Match the longest key (versioned IDs like claude-opus-4-5-20251101 win over
+  // shorter prefixes if we ever add both).
+  const key = Object.keys(sourceMap)
+    .filter((k) => stripped.startsWith(k))
+    .sort((a, b) => b.length - a.length)[0];
+  
+  const allLevels = key ? sourceMap[key] : [];
+
+  // Filter out any effort levels that this model has rejected in this session
+  const rejectedLevels = effortRejectionCache[modelId] || new Set();
+  return allLevels.filter(level => !rejectedLevels.has(level));
+};
+
+/**
+ * Record that a specific model rejected a specific effort level with ValidationException.
+ * Used to prevent re-attempting known-invalid combinations in the same session.
+ * @param {string} modelId - The model identifier
+ * @param {string} effort - The effort level that was rejected
+ */
+const recordEffortRejection = (modelId, effort) => {
+  if (!effortRejectionCache[modelId]) {
+    effortRejectionCache[modelId] = new Set();
+  }
+  effortRejectionCache[modelId].add(effort);
+  console.warn(`[effort] Model ${modelId} rejected effort=${effort}, cached for this session`);
+};
+
+/**
+ * Send a Bedrock command with automatic effort-level retry on ValidationException.
+ * If the initial command fails with ValidationException and additionalModelRequestFields
+ * contains output_config.effort, retries once with effort removed (falling back to the
+ * server-side default adaptive thinking with "high" effort).
+ * 
+ * @param {BedrockRuntimeClient} client - Configured Bedrock client
+ * @param {Command} command - ConverseCommand or ConverseStreamCommand
+ * @param {string} modelId - Model identifier for logging/caching
+ * @param {object} commandInput - Original command input (for reconstructing retry)
+ * @param {CommandConstructor} CommandClass - ConverseCommand or ConverseStreamCommand class
+ * @returns {Promise} Command response
+ */
+const sendWithEffortRetry = async (client, command, modelId, commandInput, CommandClass) => {
+  try {
+    return await client.send(command);
+  } catch (error) {
+    // Only retry on ValidationException where effort was provided
+    const isValidationError = error.name === 'ValidationException' || error.__type === 'ValidationException';
+    const hadEffort = commandInput.additionalModelRequestFields?.output_config?.effort;
+
+    if (isValidationError && hadEffort) {
+      const attemptedEffort = commandInput.additionalModelRequestFields.output_config.effort;
+      console.warn(
+        `[effort] ValidationException from ${modelId} with effort=${attemptedEffort}. ` +
+        `Retrying with adaptive thinking (server default "high"). Error: ${error.message}`
+      );
+
+      // Cache the rejection
+      recordEffortRejection(modelId, attemptedEffort);
+
+      // Rebuild command without effort
+      const retryInput = { ...commandInput };
+      delete retryInput.additionalModelRequestFields;
+
+      const retryCommand = new CommandClass(retryInput);
+      return await client.send(retryCommand);
+    }
+
+    // Non-ValidationException or no effort to strip — rethrow
+    throw error;
+  }
+};
+
+export const modelSupportsEffort = (modelId) => getEffortLevelsForModel(modelId).length > 0;
 
 export const setModel = (modelId) => {
   parameters.modelId = modelId;
@@ -286,7 +410,7 @@ const renderKnowledgeBasePrompt = (template, searchResults, query) => {
  * rather than inside Bedrock, there is no span-level attribution, so the citation bar
  * lists source documents without inline highlight spans.
  */
-const invokeManagedKbRetrieveAndGenerateStream = async (prompt, files, sessionId, credentials, modelId, conversationHistory, onChunk, systemPrompt) => {
+const invokeManagedKbRetrieveAndGenerateStream = async (prompt, files, sessionId, credentials, modelId, conversationHistory, onChunk, systemPrompt, onReasoning, effort) => {
   const agentRuntimeClient = new BedrockAgentRuntimeClient({
     region: bedrockConfig.region,
     credentials: credentials,
@@ -360,7 +484,9 @@ Instructions:
     modelId,
     conversationHistory,
     onChunk,
-    systemPrompt
+    systemPrompt,
+    onReasoning,
+    effort
   );
 
   const citations = results.length
@@ -390,7 +516,7 @@ Instructions:
   };
 };
 
-export const invokeBedrockRetrieveAndGenerateStreamCommand = async (prompt, files, sessionId, credentials, modelId, conversationHistory = [], onChunk, systemPrompt = null) => {
+export const invokeBedrockRetrieveAndGenerateStreamCommand = async (prompt, files, sessionId, credentials, modelId, conversationHistory = [], onChunk, systemPrompt = null, onReasoning = null, effort = null) => {
   if (!credentials) {
     throw new Error('Credentials not provided');
   }
@@ -401,7 +527,7 @@ export const invokeBedrockRetrieveAndGenerateStreamCommand = async (prompt, file
   // Retrieve + client-side generation path instead.
   if (isManagedKnowledgeBase()) {
     try {
-      return await invokeManagedKbRetrieveAndGenerateStream(prompt, files, sessionId, credentials, modelId, conversationHistory, onChunk, systemPrompt);
+      return await invokeManagedKbRetrieveAndGenerateStream(prompt, files, sessionId, credentials, modelId, conversationHistory, onChunk, systemPrompt, onReasoning, effort);
     } catch (error) {
       console.error('Error invoking Bedrock:', error);
       throw error;
@@ -474,6 +600,9 @@ $output_format_instructions`;
             guardrailId: bedrockConfig.guardrailId,
             guardrailVersion: bedrockConfig.guardrailVersion,
           } : undefined,
+          ...(effort && getEffortLevelsForModel(modelId).includes(effort) && {
+            additionalModelRequestFields: { output_config: { effort } },
+          }),
         },
       },
     },
@@ -486,7 +615,7 @@ $output_format_instructions`;
     }
 
     const command = new RetrieveAndGenerateStreamCommand(input);
-    const response = await bedrockClient.send(command);
+    const response = await sendWithEffortRetry(bedrockClient, command, modelId, input, RetrieveAndGenerateStreamCommand);
     
     let responseText = '';
     let citations = [];
@@ -651,7 +780,7 @@ export const invokeBedrockConverseCommand = async (prompt, files, credentials, m
   }
 };
 
-export const invokeBedrockConverseStreamCommand = async (prompt, files, credentials, modelId, conversationHistory = [], onChunk, systemPrompt = null) => {
+export const invokeBedrockConverseStreamCommand = async (prompt, files, credentials, modelId, conversationHistory = [], onChunk, systemPrompt = null, onReasoning = null, effort = null) => {
   if (!credentials) {
     throw new Error('Credentials not provided');
   }
@@ -746,6 +875,17 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
       console.log('Sending messages to Bedrock:', JSON.stringify(messages, null, 2));
     }
 
+    // Anthropic's `output_config.effort` steers thinking depth and total token spend
+    // on reasoning-capable Claude models (Opus 5, Sonnet 5, Fable 5, Opus 4.6+, etc.).
+    // Passed through Bedrock via `additionalModelRequestFields` — the API defaults to
+    // "high" server-side, which is what drives Opus 5's ~18s TTFT on chat prompts.
+    // Only send it when the caller picked a value *and* the model supports it, so we
+    // never trip a ValidationException on models that don't accept the field.
+    const effortAllowed = effort && getEffortLevelsForModel(modelId).includes(effort);
+    const additionalModelRequestFields = effortAllowed
+      ? { output_config: { effort } }
+      : undefined;
+
     const commandInput = {
       modelId,
       messages: messages.map(msg => ({
@@ -755,6 +895,7 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
       ...(systemPrompt && {
         system: [{ text: systemPrompt }]
       }),
+      ...(additionalModelRequestFields && { additionalModelRequestFields }),
       guardrailConfig: bedrockConfig.useGuardrail ? { // GuardrailStreamConfiguration
         guardrailIdentifier: bedrockConfig.guardrailId, // from aws-config.js
         guardrailVersion: bedrockConfig.guardrailVersion, // from aws-config.js
@@ -770,13 +911,52 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
 
     const command = new ConverseStreamCommand(commandInput);
 
-    const response = await bedrockClient.send(command);
+    // Diagnostic timing — leave on until we've root-caused the Opus 5 slowness.
+    // Prints TTFT, per-event type, and total wall time to the browser console.
+    const streamDiag = {
+      modelId,
+      sendStart: performance.now(),
+      firstEventAt: null,
+      firstTextAt: null,
+      firstReasoningAt: null,
+      eventCounts: {},
+    };
+    console.log('[stream-diag] sending ConverseStream', { modelId, guardrail: !!commandInput.guardrailConfig });
+
+    const response = await sendWithEffortRetry(bedrockClient, command, modelId, commandInput, ConverseStreamCommand);
+    streamDiag.responseAt = performance.now();
+    console.log('[stream-diag] response handle received', {
+      modelId,
+      sendToResponseMs: Math.round(streamDiag.responseAt - streamDiag.sendStart),
+    });
+
     let responseText = '';
     let completeMessages = [];
     let currentMessage = null;
     let usageInfo = null;  // Add this line
 
     for await (const event of response.stream) {
+      const now = performance.now();
+      if (!streamDiag.firstEventAt) {
+        streamDiag.firstEventAt = now;
+        console.log('[stream-diag] first event', {
+          modelId,
+          ttfeMs: Math.round(now - streamDiag.sendStart),
+          keys: Object.keys(event),
+        });
+      }
+      const eventType = Object.keys(event)[0] || 'unknown';
+      streamDiag.eventCounts[eventType] = (streamDiag.eventCounts[eventType] || 0) + 1;
+      // Log the delta shape on the first contentBlockDelta so we can see whether
+      // it's text, reasoningContent, or something else without spamming the log.
+      if (eventType === 'contentBlockDelta' && streamDiag.eventCounts.contentBlockDelta === 1) {
+        console.log('[stream-diag] first contentBlockDelta shape', {
+          modelId,
+          deltaKeys: Object.keys(event.contentBlockDelta.delta || {}),
+          sinceSendMs: Math.round(now - streamDiag.sendStart),
+        });
+      }
+
       // Handle message start
       if (event.messageStart) {
         currentMessage = {
@@ -784,17 +964,44 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
           content: []
         };
       }
-      
+
       //console.log("event: ")
       //console.log(event)
       // Handle content block delta (actual content)
       if (event.contentBlockDelta && event.contentBlockDelta.delta.text) {
         const chunkText = event.contentBlockDelta.delta.text;
         responseText += chunkText;
-        
+        if (!streamDiag.firstTextAt) {
+          streamDiag.firstTextAt = now;
+          console.log('[stream-diag] first text chunk', {
+            modelId,
+            ttftMs: Math.round(now - streamDiag.sendStart),
+          });
+        }
+
         if (onChunk) {
           onChunk(chunkText);
         }
+      }
+
+      // Reasoning-capable Claude models (Opus 5, etc.) can emit a reasoning content
+      // block alongside text. On Bedrock, the delta may carry plaintext
+      // (`text`/`reasoningText.text`) or only a `signature`/`redactedContent` marker
+      // — Opus reasoning on Bedrock is server-side and stub-only. Fire onReasoning
+      // for any reasoning delta so the UI can react even when there's no text.
+      const reasoningDelta = event.contentBlockDelta?.delta?.reasoningContent;
+      if (reasoningDelta && onReasoning) {
+        const reasoningText = reasoningDelta.text || reasoningDelta.reasoningText?.text || '';
+        if (!streamDiag.firstReasoningAt) {
+          streamDiag.firstReasoningAt = now;
+          console.log('[stream-diag] first reasoning delta', {
+            modelId,
+            ttrMs: Math.round(now - streamDiag.sendStart),
+            hasText: !!reasoningText,
+            deltaKeys: Object.keys(reasoningDelta),
+          });
+        }
+        onReasoning(reasoningText);
       }
 
       // Extract usage information if available
@@ -819,6 +1026,23 @@ export const invokeBedrockConverseStreamCommand = async (prompt, files, credenti
         }
       }
     }
+
+    const streamEnd = performance.now();
+    const outputChars = responseText.length;
+    const streamMs = streamDiag.firstEventAt ? streamEnd - streamDiag.firstEventAt : 0;
+    console.log('[stream-diag] complete', {
+      modelId,
+      totalMs: Math.round(streamEnd - streamDiag.sendStart),
+      ttfeMs: streamDiag.firstEventAt ? Math.round(streamDiag.firstEventAt - streamDiag.sendStart) : null,
+      ttftMs: streamDiag.firstTextAt ? Math.round(streamDiag.firstTextAt - streamDiag.sendStart) : null,
+      ttrMs: streamDiag.firstReasoningAt ? Math.round(streamDiag.firstReasoningAt - streamDiag.sendStart) : null,
+      streamMs: Math.round(streamMs),
+      outputChars,
+      charsPerSec: streamMs > 0 ? Math.round((outputChars / streamMs) * 1000) : 0,
+      eventCounts: streamDiag.eventCounts,
+      outputTokens: usageInfo?.outputTokens,
+      inputTokens: usageInfo?.inputTokens,
+    });
 
     // Add the complete messages to the conversation history
     const validCompleteMessages = completeMessages.filter(msg => msg && msg.role && msg.content);
